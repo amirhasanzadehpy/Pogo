@@ -30,15 +30,26 @@ The fixture pins Django 5.2.16. Its normal SQLite database path is
 ```sh
 make build
 make test
+make test-race
 make bench
 make clean
 ```
 
 `make test` is non-installing and requires `make fixture-env` to have already
 completed. It checks Go formatting, runs `go vet`, runs Go tests, and runs the
-fixture's standard-library Python test suite. `make bench` reports scoped N/A
-metrics until executable and hot-path benchmarks are introduced in later
-milestones.
+fixture's standard-library Python test suite. `make test-race` runs the Go suite
+with race detection. `make bench` measures the lifecycle server's idle RSS;
+completion latency remains scoped N/A until its handler is introduced.
+
+`make build` writes `build/django-orm-lsp` and `build/testclient`. Run a traced
+lifecycle scenario with logs isolated from protocol stdout:
+
+```sh
+build/testclient \
+  -scenario testdata/requests/normal-shutdown.json \
+  -trace-methods \
+  -- build/django-orm-lsp -log-file build/protocol.log
+```
 
 To run Django commands directly, invoke the virtual environment interpreter
 without activating it:

@@ -1,4 +1,6 @@
 PYTHON ?= python3
+GO_BUILD_FLAGS :=
+GO_TEST_FLAGS :=
 FIXTURE_DIR := testdata/sample_django_project
 FIXTURE_VENV := .venv-fixture
 FIXTURE_PYTHON := $(FIXTURE_VENV)/bin/python
@@ -6,12 +8,19 @@ FIXTURE_REQUIREMENTS := $(FIXTURE_DIR)/requirements.txt
 FIXTURE_CONSTRAINTS := $(FIXTURE_DIR)/constraints.txt
 FIXTURE_STAMP := $(FIXTURE_VENV)/.requirements-installed
 
-.PHONY: all build fixture-env test-env test bench clean
+ifeq ($(shell uname -s),Darwin)
+GO_BUILD_FLAGS := -ldflags=-linkmode=external
+GO_TEST_FLAGS := -ldflags=-linkmode=external
+endif
+
+.PHONY: all build fixture-env test-env test test-race bench clean
 
 all: build
 
 build:
-	go build ./...
+	mkdir -p build
+	go build $(GO_BUILD_FLAGS) -o build/django-orm-lsp ./cmd/django-orm-lsp
+	go build $(GO_BUILD_FLAGS) -o build/testclient ./cmd/testclient
 
 $(FIXTURE_STAMP): $(FIXTURE_REQUIREMENTS) $(FIXTURE_CONSTRAINTS)
 	test -x "$(FIXTURE_PYTHON)" || "$(PYTHON)" -m venv "$(FIXTURE_VENV)"
@@ -30,12 +39,15 @@ test:
 	@test -x "$(FIXTURE_PYTHON)" || { printf '%s\n' 'Fixture environment missing; run `make fixture-env` first.' >&2; exit 1; }
 	@GO_FILES=$$(git ls-files --cached --others --exclude-standard -- '*.go'); if test -n "$$GO_FILES"; then UNFORMATTED=$$(gofmt -l $$GO_FILES); test -z "$$UNFORMATTED" || { printf 'Unformatted Go files:\n%s\n' "$$UNFORMATTED" >&2; exit 1; }; fi
 	go vet ./...
-	go test ./...
+	go test $(GO_TEST_FLAGS) ./...
 	PYTHONDONTWRITEBYTECODE=1 "$(FIXTURE_PYTHON)" -m unittest discover -s "$(FIXTURE_DIR)/tests" -p 'test_*.py' -v
 
-bench:
-	@printf '%s\n' 'Hot-path latency: N/A (introduced in Milestone 5)'
-	@printf '%s\n' 'Go idle RSS: N/A (introduced in Milestone 2)'
+test-race:
+	go test -race $(GO_TEST_FLAGS) ./...
+
+bench: build
+	@printf '%s\n' 'Completion latency: N/A (introduced in Milestone 5)'
+	@build/testclient -scenario testdata/requests/idle-rss.json -- build/django-orm-lsp
 
 clean:
 	rm -rf "$(FIXTURE_VENV)" build bin benchmark-results

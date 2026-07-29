@@ -1,0 +1,76 @@
+{
+  "name": "unknown-method",
+  "timeout_ms": 5000,
+  "expect_exit_code": 0,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "processId": null,
+          "rootUri": null,
+          "capabilities": {}
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 1,
+        "result": {
+          "capabilities": {},
+          "serverInfo": {
+            "name": "django-orm-lsp",
+            "version": "0.1.0"
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "pogo/unknown",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "id": 2,
+        "error": {
+          "code": -32601
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "shutdown"
+      }
+    },
+    {
+      "expect": {
+        "id": 3,
+        "result": null
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "exit"
+      }
+    },
+    {
+      "expect_eof": true
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "name": "invalid-order",
+  "timeout_ms": 5000,
+  "expect_exit_code": 0,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "shutdown"
+      }
+    },
+    {
+      "expect": {
+        "id": 1,
+        "error": {
+          "code": -32600
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "initialize",
+        "params": {
+          "processId": null,
+          "rootUri": null,
+          "capabilities": {}
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 2,
+        "result": {
+          "capabilities": {},
+          "serverInfo": {
+            "name": "django-orm-lsp",
+            "version": "0.1.0"
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "initialize",
+        "params": {
+          "processId": null,
+          "rootUri": null,
+          "capabilities": {}
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 3,
+        "error": {
+          "code": -32600
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "shutdown"
+      }
+    },
+    {
+      "expect": {
+        "id": 4,
+        "error": {
+          "code": -32600
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "shutdown"
+      }
+    },
+    {
+      "expect": {
+        "id": 5,
+        "result": null
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "pogo/afterShutdown",
+        "params": {}
+      }
+    },
+    {
+      "expect": {
+        "id": 6,
+        "error": {
+          "code": -32600
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "exit"
+      }
+    },
+    {
+      "expect_eof": true
+    }
+  ]
+}

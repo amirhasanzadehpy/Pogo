@@ -1,0 +1,44 @@
+{
+  "name": "malformed-payload",
+  "timeout_ms": 5000,
+  "expect_exit_code": 0,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "processId": null,
+          "rootUri": null,
+          "capabilities": {}
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 1,
+        "result": {
+          "capabilities": {},
+          "serverInfo": {
+            "name": "django-orm-lsp",
+            "version": "0.1.0"
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+      }
+    },
+    {
+      "send_raw": "{"
+    },
+    {
+      "expect_eof": true
+    }
+  ]
+}
