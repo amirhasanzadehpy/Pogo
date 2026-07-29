@@ -30,3 +30,29 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local builds and profiles
+/bin/
+/build/
+*.prof
+*.trace
+
+# Python environments and caches
+/.venv-fixture/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Django fixture runtime state
+testdata/sample_django_project/db.sqlite3
+testdata/sample_django_project/db.sqlite3-*
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
+
+# IPC and benchmark artifacts
+*.sock
+/benchmark-results/
