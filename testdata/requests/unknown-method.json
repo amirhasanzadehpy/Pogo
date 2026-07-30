@@ -23,7 +23,9 @@
             "textDocumentSync": {"openClose": true, "change": 2, "save": {"includeText": true}},
             "completionProvider": {"triggerCharacters": [".", "_", "\"", "'"]},
             "hoverProvider": true,
-            "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]}
+            "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]},
+            "definitionProvider": true,
+            "documentLinkProvider": {}
           },
           "serverInfo": {
             "name": "django-orm-lsp",

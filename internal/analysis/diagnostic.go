@@ -14,11 +14,73 @@ type ORMIssue struct {
 	Range   ByteRange
 }
 
+type StaticPathReference struct {
+	Segment PathSegment
+	Field   *schema.FieldRef
+}
+
+type staticORMPath struct {
+	value    Value
+	mode     PathMode
+	segments []PathSegment
+	isString bool
+}
+
 func DiagnoseORM(snapshot Snapshot, graph *schema.Graph) []ORMIssue {
 	issues := make([]ORMIssue, 0)
 	if graph == nil || !snapshot.Parsed {
 		return issues
 	}
+	for _, path := range staticORMPaths(snapshot, graph) {
+		problem, invalid := ValidatePath(graph, path.value.CanonicalLabel, path.mode, path.segments)
+		if !invalid {
+			continue
+		}
+		issues = append(issues, ORMIssue{Code: problem.Code, Message: pathIssueMessage(problem), Range: problem.Segment.Range})
+	}
+	sort.SliceStable(issues, func(left, right int) bool {
+		if issues[left].Range.Start != issues[right].Range.Start {
+			return issues[left].Range.Start < issues[right].Range.Start
+		}
+		if issues[left].Range.End != issues[right].Range.End {
+			return issues[left].Range.End < issues[right].Range.End
+		}
+		if issues[left].Code != issues[right].Code {
+			return issues[left].Code < issues[right].Code
+		}
+		return issues[left].Message < issues[right].Message
+	})
+	return issues
+}
+
+func ResolveStaticORMPathReferences(snapshot Snapshot, graph *schema.Graph) []StaticPathReference {
+	var references []StaticPathReference
+	for _, path := range staticORMPaths(snapshot, graph) {
+		if !path.isString {
+			continue
+		}
+		for index, segment := range path.segments {
+			resolved, ok := ResolvePathSegment(graph, path.value.CanonicalLabel, path.mode, path.segments, index)
+			if !ok || resolved.Field == nil {
+				break
+			}
+			references = append(references, StaticPathReference{Segment: segment, Field: resolved.Field})
+		}
+	}
+	sort.SliceStable(references, func(left, right int) bool {
+		if references[left].Segment.Range.Start != references[right].Segment.Range.Start {
+			return references[left].Segment.Range.Start < references[right].Segment.Range.Start
+		}
+		return references[left].Segment.Range.End < references[right].Segment.Range.End
+	})
+	return references
+}
+
+func staticORMPaths(snapshot Snapshot, graph *schema.Graph) []staticORMPath {
+	if graph == nil || !snapshot.Parsed {
+		return nil
+	}
+	var paths []staticORMPath
 	for _, call := range snapshot.Calls {
 		mode, stringPaths, supported := pathMethod(call.Method)
 		if !supported || call.Receiver.Start < 0 || call.Receiver.End > len(snapshot.Source) || call.Receiver.Start >= call.Receiver.End {
@@ -49,26 +111,10 @@ func DiagnoseORM(snapshot Snapshot, graph *schema.Graph) []ORMIssue {
 			if !ok || len(segments) > MaxPathSegments {
 				continue
 			}
-			problem, invalid := ValidatePath(graph, value.CanonicalLabel, mode, segments)
-			if !invalid {
-				continue
-			}
-			issues = append(issues, ORMIssue{Code: problem.Code, Message: pathIssueMessage(problem), Range: problem.Segment.Range})
+			paths = append(paths, staticORMPath{value: value, mode: mode, segments: segments, isString: stringPaths})
 		}
 	}
-	sort.SliceStable(issues, func(left, right int) bool {
-		if issues[left].Range.Start != issues[right].Range.Start {
-			return issues[left].Range.Start < issues[right].Range.Start
-		}
-		if issues[left].Range.End != issues[right].Range.End {
-			return issues[left].Range.End < issues[right].Range.End
-		}
-		if issues[left].Code != issues[right].Code {
-			return issues[left].Code < issues[right].Code
-		}
-		return issues[left].Message < issues[right].Message
-	})
-	return issues
+	return paths
 }
 
 func pathIssueMessage(issue PathIssue) string {

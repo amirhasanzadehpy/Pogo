@@ -278,8 +278,9 @@ func testField(sourceModel, name, fieldType string) schema.Field {
 
 func testSourceRange() *schema.SourceRange {
 	return &schema.SourceRange{
-		FilePath: "/project/myapp/models.py",
-		Start:    schema.Position{Line: 1},
-		End:      schema.Position{Line: 1, Column: 1},
+		FilePath:     "/project/myapp/models.py",
+		SourceDigest: strings.Repeat("0", 64),
+		Start:        schema.Position{Line: 1},
+		End:          schema.Position{Line: 1, Column: 1},
 	}
 }

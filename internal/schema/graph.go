@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,14 @@ import (
 	"sort"
 	"strings"
 )
+
+func MatchesSourceDigest(source []byte, digest string) bool {
+	if len(digest) != 64 {
+		return false
+	}
+	sum := sha256.Sum256(source)
+	return hex.EncodeToString(sum[:]) == digest
+}
 
 const (
 	Version          = 1
@@ -416,6 +426,9 @@ func validateRange(sourceRange *SourceRange) error {
 	if sourceRange.End.Line < sourceRange.Start.Line || (sourceRange.End.Line == sourceRange.Start.Line && sourceRange.End.Column < sourceRange.Start.Column) {
 		return errors.New("end precedes start")
 	}
+	if len(sourceRange.SourceDigest) != 64 || strings.Trim(sourceRange.SourceDigest, "0123456789abcdef") != "" {
+		return errors.New("invalid source digest")
+	}
 	return nil
 }
 
@@ -730,6 +743,17 @@ func (graph *Graph) ModelInfo(canonicalLabel string) (ModelInfo, bool) {
 	}, true
 }
 
+func (graph *Graph) ModelSourceRange(canonicalLabel string) (SourceRange, bool) {
+	if graph == nil {
+		return SourceRange{}, false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil || index.model.SourceRange == nil {
+		return SourceRange{}, false
+	}
+	return *index.model.SourceRange, true
+}
+
 func (graph *Graph) ModuleModelCount(module string) int {
 	if graph == nil {
 		return 0
@@ -747,6 +771,40 @@ func (graph *Graph) Field(canonicalLabel, name string) (*FieldRef, bool) {
 	}
 	field, exists := index.fields[name]
 	return field, exists
+}
+
+func (graph *Graph) RelationFieldForSource(filePath, className, fieldName string, start, end Position) (*FieldRef, bool) {
+	if graph == nil || filePath == "" || className == "" || fieldName == "" {
+		return nil, false
+	}
+	filePath = resolvedPath(filePath)
+	var selected *FieldRef
+	selectedTarget := ""
+	for _, index := range graph.canonical {
+		for _, field := range index.fields {
+			direction, forward := field.RelationDirection()
+			sourceRange, hasRange := field.SourceRange()
+			if !forward || direction != RelationForward || !hasRange || field.Name() != fieldName || !strings.HasSuffix(field.SourceModel(), "."+className) || sourceRange.Start != start || sourceRange.End != end || !samePath(resolvedPath(sourceRange.FilePath), filePath) {
+				continue
+			}
+			target, ok := field.RuntimeRelatedModel()
+			if !ok {
+				target, ok = field.RelatedModel()
+			}
+			if !ok || selected != nil && (selectedTarget != target || !sameSourceRange(selected, field)) {
+				return nil, false
+			}
+			selected = field
+			selectedTarget = target
+		}
+	}
+	return selected, selected != nil
+}
+
+func sameSourceRange(left, right *FieldRef) bool {
+	leftRange, leftOK := left.SourceRange()
+	rightRange, rightOK := right.SourceRange()
+	return leftOK && rightOK && leftRange == rightRange
 }
 
 func (graph *Graph) QueryField(canonicalLabel, name string) (*FieldRef, bool) {
@@ -989,6 +1047,20 @@ func (field *FieldRef) IsUnique() bool { return field != nil && field.field.Uniq
 
 func (field *FieldRef) IsPrimaryKey() bool { return field != nil && field.field.PrimaryKey }
 
+func (field *FieldRef) SourceRange() (SourceRange, bool) {
+	if field == nil || field.field.SourceRange == nil {
+		return SourceRange{}, false
+	}
+	return *field.field.SourceRange, true
+}
+
+func (field *FieldRef) RuntimeRelatedModel() (string, bool) {
+	if field == nil || field.field.RuntimeRelatedModel == nil || *field.field.RuntimeRelatedModel == "" {
+		return "", false
+	}
+	return *field.field.RuntimeRelatedModel, true
+}
+
 func (field *FieldRef) SourceModel() string {
 	if field == nil {
 		return ""
@@ -1102,6 +1174,13 @@ func (manager *ManagerRef) OwnerClass() string {
 		return ""
 	}
 	return manager.manager.OwnerClass
+}
+
+func (manager *ManagerRef) SourceRange() (SourceRange, bool) {
+	if manager == nil || manager.manager.SourceRange == nil {
+		return SourceRange{}, false
+	}
+	return *manager.manager.SourceRange, true
 }
 
 func (manager *ManagerRef) QuerySetClass() (string, bool) {

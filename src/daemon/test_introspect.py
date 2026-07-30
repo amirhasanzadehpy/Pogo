@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -677,6 +678,7 @@ def models(snapshot):
 def source_range(start_line, start_column, end_line, end_column):
     return {
         "file_path": MODELS_PATH,
+        "source_digest": hashlib.sha256(Path(MODELS_PATH).read_bytes()).hexdigest(),
         "start": {"line": start_line, "column": start_column},
         "end": {"line": end_line, "column": end_column},
     }

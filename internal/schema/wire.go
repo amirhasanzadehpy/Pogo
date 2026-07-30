@@ -259,7 +259,7 @@ func validateSourceRangeWire(payload json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if err := requireKinds(object, map[string]jsonKind{"file_path": kindString, "start": kindObject, "end": kindObject}); err != nil {
+	if err := requireKinds(object, map[string]jsonKind{"file_path": kindString, "source_digest": kindString, "start": kindObject, "end": kindObject}); err != nil {
 		return err
 	}
 	for _, key := range []string{"start", "end"} {

@@ -38,9 +38,9 @@ make clean
 `make test` is non-installing and requires `make fixture-env` to have already
 completed. It checks Go formatting, runs `go vet`, runs Go tests, and runs both
 the fixture and daemon standard-library Python suites. `make test-race` runs the
-Go suite with race detection. `make bench` measures parse-update, completion and
-diagnostic handlers, end-to-end completion/diagnostic p50/p95, schema refresh,
-graph lookup, and server/worker RSS.
+Go suite with race detection. `make bench` measures parse-update, completion,
+diagnostic, definition, and document-link handlers; end-to-end p50/p95; schema
+refresh; graph lookup; and server/worker RSS.
 
 `make build` writes `build/django-orm-lsp` and `build/testclient`. Run a traced
 lifecycle scenario with logs isolated from protocol stdout:
@@ -86,6 +86,14 @@ related-loading paths, attached custom managers, and custom QuerySet chains.
 Signature help and method hover use cached signatures and docstrings without
 executing project methods. These hot handlers continue to use the last valid
 cache when the worker is unavailable and never issue worker requests.
+
+Definition navigation uses the same cache-only resolver for model imports,
+fields, relations, managers, custom methods, and individual ORM path segments.
+Inherited and reverse fields retain their originating declaration, while lookup
+and transform suffixes target the underlying field. Document links cover static
+relation-target and `related_name` strings in model declarations and resolvable
+schema-backed string query paths. Targets are absolute percent-encoded file URIs;
+missing or stale source files are omitted without failing the request.
 
 Completed static ORM paths are validated locally on open, change, and save.
 Diagnostics use stable `django-orm.*` codes, exact UTF-16 segment ranges, and the

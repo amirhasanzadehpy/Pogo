@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import hashlib
 import importlib
 import inspect
+import io
 import json
 import os
 from pathlib import Path
@@ -39,6 +41,7 @@ class SourceIndex:
     def __init__(self):
         self._files = {}
         self._classes = {}
+        self._digests = {}
 
     def class_info(self, cls):
         cached = self._classes.get(cls)
@@ -123,17 +126,28 @@ class SourceIndex:
             start_column = first.col_offset
         return {
             "file_path": path,
+            "source_digest": self.file_digest(path),
             "start": {"line": start_line, "column": start_column},
             "end": {"line": node.end_lineno, "column": node.end_col_offset},
         }
+
+    def file_digest(self, path):
+        cached = self._digests.get(path)
+        if cached is None:
+            self._parse(path)
+            cached = self._digests[path]
+        return cached
 
     def _parse(self, path):
         cached = self._files.get(path)
         if cached is not None:
             return cached
-        with tokenize.open(path) as source_file:
-            tree = ast.parse(source_file.read(), filename=path)
+        with open(path, "rb") as source_file:
+            source = source_file.read()
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+        tree = ast.parse(source.decode(encoding), filename=path)
         self._files[path] = tree
+        self._digests[path] = hashlib.sha256(source).hexdigest()
         return tree
 
 

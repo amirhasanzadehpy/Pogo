@@ -321,8 +321,16 @@ func TestCompletionAndHoverDoNotRequestStoppedWorker(t *testing.T) {
 	if err != nil || help == nil {
 		t.Fatalf("SignatureHelp() with stopped worker = %#v, %v", help, err)
 	}
+	definitionOffset := strings.Index(string(source), "author__") + 2
+	definitionPosition, _ := analysis.PositionAt(source, definitionOffset)
+	if _, err := features.Definition(uri, definitionPosition); err != nil {
+		t.Fatalf("Definition() with stopped worker error = %v", err)
+	}
+	if _, err := features.DocumentLinks(uri); err != nil {
+		t.Fatalf("DocumentLinks() with stopped worker error = %v", err)
+	}
 	if got := manager.RequestCount(); got != requestsAfterStop {
-		t.Fatalf("worker requests after completion/hover/signature = %d, want %d", got, requestsAfterStop)
+		t.Fatalf("worker requests after cached feature handlers = %d, want %d", got, requestsAfterStop)
 	}
 }
 
@@ -605,10 +613,10 @@ func featureTestField(sourceModel, name, fieldType string) schema.Field {
 }
 
 func featureTestSourceRange() *schema.SourceRange {
-	return &schema.SourceRange{FilePath: "/project/myapp/models.py", Start: schema.Position{Line: 1}, End: schema.Position{Line: 1, Column: 1}}
+	return &schema.SourceRange{FilePath: "/project/myapp/models.py", SourceDigest: strings.Repeat("0", 64), Start: schema.Position{Line: 1}, End: schema.Position{Line: 1, Column: 1}}
 }
 
-func lspSourceAtCursor(t *testing.T, value string) ([]byte, analysis.Position) {
+func lspSourceAtCursor(t testingT, value string) ([]byte, analysis.Position) {
 	t.Helper()
 	if strings.Count(value, "|") != 1 {
 		t.Fatalf("source must contain one cursor: %q", value)

@@ -153,9 +153,10 @@ type LookupPath struct {
 }
 
 type SourceRange struct {
-	FilePath string   `json:"file_path"`
-	Start    Position `json:"start"`
-	End      Position `json:"end"`
+	FilePath     string   `json:"file_path"`
+	SourceDigest string   `json:"source_digest,omitempty"`
+	Start        Position `json:"start"`
+	End          Position `json:"end"`
 }
 
 type Position struct {

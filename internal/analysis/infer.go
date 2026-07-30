@@ -54,10 +54,15 @@ type Context struct {
 }
 
 var (
-	fromImportPattern = regexp.MustCompile(`(?s)^\s*from\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+(.+)$`)
-	importPattern     = regexp.MustCompile(`^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$`)
-	annotationPattern = regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_.]*(?:\[[A-Za-z_][A-Za-z0-9_.]*\])?)(?:\s*=\s*(.+))?$`)
-	assignmentPattern = regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$`)
+	fromImportPattern        = regexp.MustCompile(`(?s)^\s*from\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+(.+)$`)
+	importPattern            = regexp.MustCompile(`^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$`)
+	annotationPattern        = regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_.]*(?:\[[A-Za-z_][A-Za-z0-9_.]*\])?)(?:\s*=\s*(.+))?$`)
+	assignmentPattern        = regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$`)
+	bindingIdentifierPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	definitionBindingPattern = regexp.MustCompile(`(?m)^\s*(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+	forBindingPattern        = regexp.MustCompile(`(?m)\bfor\s+([^:\n]+?)\s+in\b`)
+	asBindingPattern         = regexp.MustCompile(`(?m)\bas\s+(\([^\n)]*\)|[A-Za-z_][A-Za-z0-9_]*)`)
+	walrusBindingPattern     = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*:=`)
 )
 
 func Analyze(source []byte, offset int, graph *schema.Graph) (Context, bool) {
@@ -305,6 +310,9 @@ func inferExpression(expression string, sourcePrefix []byte, graph *schema.Graph
 func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int) (map[string]string, map[string]Value) {
 	imports := make(map[string]string)
 	values := make(map[string]Value)
+	var guardedBindings []string
+	var futureBindings []string
+	var opaqueBindings []string
 	lines := bytes.Split(source, []byte{'\n'})
 	if len(syntax) > 0 {
 		ordered := append([]SyntaxStatement(nil), syntax...)
@@ -320,12 +328,33 @@ func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStateme
 		}
 		lines = lines[:0]
 		for _, statement := range ordered {
-			if statement.ScopeMarker || statement.Guarded {
+			if statement.ScopeMarker {
+				if statement.Start == currentScope.Start && statement.End == currentScope.End || currentScope.ScopeEnd != 0 && (statement.Start <= currentScope.ScopeStart || statement.End > currentScope.ScopeEnd) {
+					continue
+				}
+				if currentScope.ScopeKind == "function_definition" || statement.End <= offset {
+					if match := definitionBindingPattern.FindStringSubmatch(statement.Text); match != nil {
+						opaqueBindings = append(opaqueBindings, match[1])
+					}
+				}
 				continue
 			}
 			inScope := statement.ScopeKind == "" || statement.ScopeStart == currentScope.ScopeStart && statement.ScopeEnd == currentScope.ScopeEnd && statement.ScopeKind == currentScope.ScopeKind
+			if statement.Guarded {
+				if inScope && (statement.Start < offset || currentScope.ScopeKind == "function_definition") {
+					guardedBindings = append(guardedBindings, statementBindingNames(statement.Text)...)
+				}
+				continue
+			}
+			if statement.End > offset && inScope && currentScope.ScopeKind == "function_definition" {
+				futureBindings = append(futureBindings, statementBindingNames(statement.Text)...)
+				continue
+			}
 			if statement.End <= offset && inScope {
 				lines = append(lines, []byte(statement.Text))
+				if !recognizedEnvironmentStatement(statement.Text) {
+					opaqueBindings = append(opaqueBindings, statementBindingNames(statement.Text)...)
+				}
 			}
 		}
 	}
@@ -357,9 +386,11 @@ func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStateme
 			continue
 		}
 		if match := annotationPattern.FindStringSubmatch(line); match != nil {
+			name := match[1]
 			if match[3] != "" {
 				if value := resolveExpression(match[3], imports, values, graph); value.Kind != ValueUnknown {
-					values[match[1]] = value
+					values[name] = value
+					delete(imports, name)
 					continue
 				}
 			}
@@ -369,21 +400,202 @@ func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStateme
 				container := annotation[:open]
 				container = expandImport(container, imports)
 				if container != "QuerySet" && !strings.HasSuffix(container, ".QuerySet") {
+					values[name] = Value{}
+					delete(imports, name)
 					continue
 				}
 				annotation = annotation[open+1 : len(annotation)-1]
 				kind = ValueQuerySet
 			}
 			if label, ok := resolveClass(annotation, imports, graph); ok {
-				values[match[1]] = Value{CanonicalLabel: label, Kind: kind}
+				values[name] = Value{CanonicalLabel: label, Kind: kind}
+			} else {
+				values[name] = Value{}
 			}
+			delete(imports, name)
 			continue
 		}
 		if match := assignmentPattern.FindStringSubmatch(line); match != nil {
-			values[match[1]] = resolveExpression(match[2], imports, values, graph)
+			value := resolveExpression(match[2], imports, values, graph)
+			delete(imports, match[1])
+			values[match[1]] = value
 		}
 	}
+	for _, name := range guardedBindings {
+		delete(imports, name)
+		delete(values, name)
+	}
+	for _, name := range futureBindings {
+		delete(imports, name)
+		delete(values, name)
+	}
+	for _, name := range opaqueBindings {
+		delete(imports, name)
+		delete(values, name)
+	}
 	return imports, values
+}
+
+func importBindingNames(line string) []string {
+	line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	if match := fromImportPattern.FindStringSubmatch(line); match != nil {
+		items := strings.Trim(strings.TrimSpace(match[2]), "()")
+		var names []string
+		for _, item := range strings.Split(items, ",") {
+			parts := strings.Fields(strings.TrimSpace(item))
+			if len(parts) == 0 || parts[0] == "*" {
+				continue
+			}
+			name := parts[0]
+			if len(parts) == 3 && parts[1] == "as" {
+				name = parts[2]
+			}
+			names = append(names, name)
+		}
+		return names
+	}
+	if match := importPattern.FindStringSubmatch(line); match != nil {
+		name := strings.Split(match[1], ".")[0]
+		if match[2] != "" {
+			name = match[2]
+		}
+		return []string{name}
+	}
+	return nil
+}
+
+func statementBindingNames(text string) []string {
+	seen := make(map[string]struct{})
+	var names []string
+	addTarget := func(target string) {
+		for _, name := range bindingIdentifierPattern.FindAllString(target, -1) {
+			if _, exists := seen[name]; !exists {
+				seen[name] = struct{}{}
+				names = append(names, name)
+			}
+		}
+	}
+	for _, name := range importBindingNames(text) {
+		addTarget(name)
+	}
+	if match := definitionBindingPattern.FindStringSubmatch(text); match != nil {
+		addTarget(match[1])
+	}
+	if match := annotationPattern.FindStringSubmatch(strings.TrimSpace(text)); match != nil {
+		addTarget(match[1])
+	} else {
+		for _, target := range assignmentTargets(text) {
+			for _, name := range bindingTargetNames(target) {
+				addTarget(name)
+			}
+		}
+	}
+	for _, match := range forBindingPattern.FindAllStringSubmatch(text, -1) {
+		for _, name := range bindingTargetNames(match[1]) {
+			addTarget(name)
+		}
+	}
+	for _, match := range asBindingPattern.FindAllStringSubmatch(text, -1) {
+		for _, name := range bindingTargetNames(match[1]) {
+			addTarget(name)
+		}
+	}
+	for _, match := range walrusBindingPattern.FindAllStringSubmatch(text, -1) {
+		addTarget(match[1])
+	}
+	return names
+}
+
+func assignmentTargets(text string) []string {
+	var targets []string
+	start := 0
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := 0; index < len(text); index++ {
+		value := text[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch value {
+		case '\'', '"':
+			quote = value
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case '=':
+			if depth == 0 && (index == 0 || text[index-1] != '=' && !strings.ContainsRune("!<>", rune(text[index-1]))) && (index+1 == len(text) || text[index+1] != '=') {
+				targets = append(targets, text[start:index])
+				start = index + 1
+			}
+		}
+	}
+	return targets
+}
+
+func bindingTargetNames(target string) []string {
+	target = strings.TrimSpace(target)
+	for strings.HasPrefix(target, "*") {
+		target = strings.TrimSpace(target[1:])
+	}
+	if colon := strings.IndexByte(target, ':'); colon >= 0 {
+		target = strings.TrimSpace(target[:colon])
+	}
+	if len(target) >= 2 && (target[0] == '(' && target[len(target)-1] == ')' || target[0] == '[' && target[len(target)-1] == ']') {
+		target = target[1 : len(target)-1]
+	}
+	parts := splitBindingTargets(target)
+	if len(parts) > 1 {
+		var names []string
+		for _, part := range parts {
+			names = append(names, bindingTargetNames(part)...)
+		}
+		return names
+	}
+	if identifierText(target) {
+		return []string{target}
+	}
+	return nil
+}
+
+func splitBindingTargets(target string) []string {
+	start := 0
+	depth := 0
+	var parts []string
+	for index := 0; index < len(target); index++ {
+		switch target[index] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, target[start:index])
+				start = index + 1
+			}
+		}
+	}
+	if start > 0 {
+		parts = append(parts, target[start:])
+	}
+	return parts
+}
+
+func recognizedEnvironmentStatement(text string) bool {
+	line := strings.TrimSpace(strings.TrimSuffix(text, "\r"))
+	return fromImportPattern.MatchString(line) || importPattern.MatchString(line) || annotationPattern.MatchString(line) || assignmentPattern.MatchString(line)
 }
 
 func resolveExpression(expression string, imports map[string]string, values map[string]Value, graph *schema.Graph) Value {

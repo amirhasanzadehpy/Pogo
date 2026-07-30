@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -696,6 +697,85 @@ func TestEffectivePrimaryKeyOwnsPKAlias(t *testing.T) {
 	}
 }
 
+func TestNavigationSourceAccessors(t *testing.T) {
+	graph, err := Build(syntheticSnapshot(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelRange, ok := graph.ModelSourceRange("app.Model0")
+	if !ok || modelRange != *testRange(1) {
+		t.Fatalf("ModelSourceRange() = %#v, %v", modelRange, ok)
+	}
+	field, ok := graph.Field("app.Model0", "relation")
+	if !ok {
+		t.Fatal("relation field not found")
+	}
+	fieldRange, ok := field.SourceRange()
+	if !ok || fieldRange != *testRange(1) {
+		t.Fatalf("FieldRef.SourceRange() = %#v, %v", fieldRange, ok)
+	}
+	manager, ok := graph.Manager("app.Model0", "objects")
+	if !ok {
+		t.Fatal("objects manager not found")
+	}
+	managerRange, ok := manager.SourceRange()
+	if !ok || managerRange != *testRange(1) {
+		t.Fatalf("ManagerRef.SourceRange() = %#v, %v", managerRange, ok)
+	}
+	if _, ok := (*FieldRef)(nil).SourceRange(); ok {
+		t.Fatal("nil field returned a source range")
+	}
+	if _, ok := (*ManagerRef)(nil).SourceRange(); ok {
+		t.Fatal("nil manager returned a source range")
+	}
+}
+
+func TestBuildRejectsEmptySourceDigest(t *testing.T) {
+	snapshot := syntheticSnapshot(1)
+	model := snapshot.Apps["app"].Models["Model0"]
+	model.SourceRange.SourceDigest = ""
+	snapshot.Apps["app"].Models["Model0"] = model
+	if _, err := Build(snapshot); err == nil || !strings.Contains(err.Error(), "source digest") {
+		t.Fatalf("Build() error = %v, want invalid source digest", err)
+	}
+}
+
+func TestRelationFieldForInheritedSourceRequiresOneTarget(t *testing.T) {
+	snapshot := syntheticSnapshot(2)
+	oneTarget := "app.Model1"
+	for name, model := range snapshot.Apps["app"].Models {
+		field := model.Fields["relation"]
+		field.SourceModel = "app.AbstractRelation"
+		field.SourceModelAbstract = true
+		field.RelatedModel = &oneTarget
+		field.SourceRange = testRange(1)
+		model.Fields["relation"] = field
+		snapshot.Apps["app"].Models[name] = model
+	}
+	graph, err := Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, ok := graph.RelationFieldForSource("/project/app/models.py", "AbstractRelation", "relation", Position{Line: 1}, Position{Line: 1, Column: 1})
+	if !ok || field.SourceModel() != "app.AbstractRelation" {
+		t.Fatalf("RelationFieldForSource() = %#v, %v", field, ok)
+	}
+
+	model := snapshot.Apps["app"].Models["Model0"]
+	fieldDTO := model.Fields["relation"]
+	otherTarget := "app.Model0"
+	fieldDTO.RelatedModel = &otherTarget
+	model.Fields["relation"] = fieldDTO
+	snapshot.Apps["app"].Models["Model0"] = model
+	graph, err = Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if field, ok := graph.RelationFieldForSource("/project/app/models.py", "AbstractRelation", "relation", Position{Line: 1}, Position{Line: 1, Column: 1}); ok {
+		t.Fatalf("ambiguous RelationFieldForSource() = %#v", field)
+	}
+}
+
 func syntheticSnapshot(count int) Snapshot {
 	models := make(map[string]Model, count)
 	for index := 0; index < count; index++ {
@@ -768,8 +848,9 @@ func syntheticSnapshot(count int) Snapshot {
 
 func testRange(line int) *SourceRange {
 	return &SourceRange{
-		FilePath: "/project/app/models.py",
-		Start:    Position{Line: line},
-		End:      Position{Line: line, Column: 1},
+		FilePath:     "/project/app/models.py",
+		SourceDigest: strings.Repeat("0", 64),
+		Start:        Position{Line: line},
+		End:          Position{Line: line, Column: 1},
 	}
 }

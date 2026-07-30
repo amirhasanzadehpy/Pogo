@@ -339,21 +339,28 @@ func (store *Store) extractCalls(tree *gotreesitter.Tree, source []byte) []Synta
 			}
 			function := node.ChildByFieldName("function", store.language)
 			arguments := node.ChildByFieldName("arguments", store.language)
-			if function == nil || arguments == nil || function.Type(store.language) != "attribute" {
+			if function == nil || arguments == nil {
 				continue
 			}
-			receiver := function.ChildByFieldName("object", store.language)
-			method := function.ChildByFieldName("attribute", store.language)
-			if receiver == nil || method == nil {
-				continue
-			}
-			methodName := method.Text(source)
-			if _, _, supported := pathMethod(methodName); !supported {
+			var receiverRange ByteRange
+			methodName := ""
+			switch function.Type(store.language) {
+			case "attribute":
+				receiver := function.ChildByFieldName("object", store.language)
+				method := function.ChildByFieldName("attribute", store.language)
+				if receiver == nil || method == nil {
+					continue
+				}
+				receiverRange = ByteRange{Start: int(receiver.StartByte()), End: int(receiver.EndByte())}
+				methodName = method.Text(source)
+			case "identifier":
+				methodName = function.Text(source)
+			default:
 				continue
 			}
 			calls = append(calls, SyntaxCall{
 				Range:     ByteRange{Start: int(node.StartByte()), End: int(node.EndByte())},
-				Receiver:  ByteRange{Start: int(receiver.StartByte()), End: int(receiver.EndByte())},
+				Receiver:  receiverRange,
 				Arguments: ByteRange{Start: int(arguments.StartByte()), End: int(arguments.EndByte())},
 				Method:    methodName,
 			})
@@ -399,12 +406,16 @@ func (store *Store) extractSyntax(tree *gotreesitter.Tree, source []byte) []Synt
 			}
 		}
 	}
-	type guardedRange struct{ start, end int }
+	type guardedRange struct {
+		start int
+		end   int
+		text  string
+	}
 	var guardedRanges []guardedRange
 	for _, match := range store.guarded.Execute(tree) {
 		for _, capture := range match.Captures {
 			if capture.Name == "guarded" && capture.Node != nil {
-				guardedRanges = append(guardedRanges, guardedRange{start: int(capture.Node.StartByte()), end: int(capture.Node.EndByte())})
+				guardedRanges = append(guardedRanges, guardedRange{start: int(capture.Node.StartByte()), end: int(capture.Node.EndByte()), text: capture.Text(source)})
 			}
 		}
 	}
@@ -421,8 +432,15 @@ func (store *Store) extractSyntax(tree *gotreesitter.Tree, source []byte) []Synt
 	statements := make([]SyntaxStatement, 0, len(matches)+len(scopes))
 	for _, scope := range scopes {
 		statements = append(statements, SyntaxStatement{
-			Start: scope.start, End: scope.end, ScopeStart: scope.start, ScopeEnd: scope.end,
+			Start: scope.start, End: scope.end, Text: string(source[scope.start:scope.end]), ScopeStart: scope.start, ScopeEnd: scope.end,
 			ScopeKind: scope.kind, ScopeMarker: true,
+		})
+	}
+	for _, guarded := range guardedRanges {
+		scope := scopeFor(guarded.start, guarded.end)
+		statements = append(statements, SyntaxStatement{
+			Start: guarded.start, End: guarded.end, Text: guarded.text,
+			ScopeStart: scope.start, ScopeEnd: scope.end, ScopeKind: scope.kind, Guarded: true,
 		})
 	}
 	for _, match := range matches {
@@ -474,8 +492,26 @@ func parameterStatements(source []byte, scopeStart, scopeEnd int) []SyntaxStatem
 	var statements []SyntaxStatement
 	appendSegment := func(end int) {
 		text := strings.TrimSpace(string(source[segmentStart:end]))
-		if text == "" || !strings.Contains(text, ":") {
+		if text == "" || text == "/" || text == "*" {
 			return
+		}
+		bindingEnd := len(text)
+		if index := strings.IndexAny(text, ":="); index >= 0 {
+			bindingEnd = index
+		}
+		name := strings.TrimLeft(strings.TrimSpace(text[:bindingEnd]), "*")
+		if !identifierText(name) {
+			return
+		}
+		if colon := strings.IndexByte(text, ':'); colon >= 0 {
+			annotated := name + text[colon:]
+			if annotationPattern.MatchString(annotated) {
+				text = annotated
+			} else {
+				text = name + " = __pogo_parameter__"
+			}
+		} else {
+			text = name + " = __pogo_parameter__"
 		}
 		statements = append(statements, SyntaxStatement{
 			Start: segmentStart, End: end, Text: text,
