@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/amirhasanzadehpy/Pogo/internal/schema"
@@ -54,6 +55,14 @@ type Manager struct {
 	activeRuntimeDir string
 	run              func(context.Context, func(uint64, int)) (bool, error)
 	workerScript     []byte
+	requestCount     atomic.Uint64
+}
+
+func (manager *Manager) RequestCount() uint64 {
+	if manager == nil {
+		return 0
+	}
+	return manager.requestCount.Load()
 }
 
 func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, error) {
@@ -281,7 +290,9 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	if err := endpoint.Seal(); err != nil && !errors.Is(err, net.ErrClosed) {
 		return false, fmt.Errorf("seal worker endpoint: %w", err)
 	}
-	workerClient := newClient(connection, manager.config.RequestTimeout)
+	workerClient := newClient(connection, manager.config.RequestTimeout, func() {
+		manager.requestCount.Add(1)
+	})
 	var snapshot schema.Snapshot
 	requestContext, cancelRequest := context.WithTimeout(ctx, manager.config.RequestTimeout)
 	err = workerClient.Request(requestContext, "schema/load", &snapshot)

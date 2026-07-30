@@ -41,6 +41,7 @@ type Lifecycle struct {
 	worker                   Worker
 	factory                  WorkerFactory
 	workerConfigurationError error
+	features                 *Features
 }
 
 type Worker interface {
@@ -71,9 +72,17 @@ func NewLifecycleContext(ctx context.Context, cancel context.CancelFunc, logger 
 	return lifecycle
 }
 
-func NewLifecycleContextWithFactory(ctx context.Context, cancel context.CancelFunc, logger commonlog.Logger, factory WorkerFactory) *Lifecycle {
+func NewLifecycleContextWithFactory(ctx context.Context, cancel context.CancelFunc, logger commonlog.Logger, factory WorkerFactory, featureSets ...*Features) *Lifecycle {
 	lifecycle := NewLifecycleContext(ctx, cancel, logger)
 	lifecycle.factory = factory
+	if len(featureSets) > 0 && featureSets[0] != nil {
+		lifecycle.features = featureSets[0]
+		lifecycle.handler.TextDocumentDidOpen = lifecycle.features.didOpen
+		lifecycle.handler.TextDocumentDidChange = lifecycle.features.didChange
+		lifecycle.handler.TextDocumentDidClose = lifecycle.features.didClose
+		lifecycle.handler.TextDocumentCompletion = lifecycle.features.completion
+		lifecycle.handler.TextDocumentHover = lifecycle.features.hover
+	}
 	return lifecycle
 }
 
@@ -173,8 +182,12 @@ func (lifecycle *Lifecycle) initialize(_ *glsp.Context, params *protocol.Initial
 			lifecycle.worker = worker
 		}
 	}
+	capabilities := protocol.ServerCapabilities{}
+	if lifecycle.features != nil {
+		capabilities = lifecycle.features.Capabilities()
+	}
 	return protocol.InitializeResult{
-		Capabilities: protocol.ServerCapabilities{},
+		Capabilities: capabilities,
 		ServerInfo: &protocol.InitializeResultServerInfo{
 			Name:    ServerName,
 			Version: &version,
@@ -206,6 +219,9 @@ func (lifecycle *Lifecycle) initialized(ctx *glsp.Context, _ *protocol.Initializ
 
 func (lifecycle *Lifecycle) shutdown(_ *glsp.Context) error {
 	lifecycle.info("shutdown received")
+	if lifecycle.features != nil {
+		lifecycle.features.Close()
+	}
 	lifecycle.stopWorker("shutdown")
 	return nil
 }

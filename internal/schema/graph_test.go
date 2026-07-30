@@ -31,6 +31,25 @@ func TestBuildIndexesAndRejectsDanglingRelations(t *testing.T) {
 	if _, ok := graph.Manager("app.Model1", "objects"); !ok {
 		t.Fatal("manager index misses objects")
 	}
+	if label, ok := graph.CanonicalLabelForClass("app.models.Model1"); !ok || label != "app.Model1" {
+		t.Fatalf("class path resolution = %q, %v", label, ok)
+	}
+	var queryNames []string
+	graph.VisitQueryFields("app.Model1", func(access FieldAccess) bool {
+		queryNames = append(queryNames, access.Name)
+		return true
+	})
+	if got, want := fmt.Sprint(queryNames), "[relation relation_id reverse]"; got != want {
+		t.Fatalf("query field order = %s, want %s", got, want)
+	}
+	var instanceNames []string
+	graph.VisitInstanceFields("app.Model1", func(access FieldAccess) bool {
+		instanceNames = append(instanceNames, access.Name)
+		return true
+	})
+	if got, want := fmt.Sprint(instanceNames), "[relation relation_id reverse_set]"; got != want {
+		t.Fatalf("instance field order = %s, want %s", got, want)
+	}
 
 	missing := "app.Missing"
 	model := snapshot.Apps["app"].Models["Model1"]

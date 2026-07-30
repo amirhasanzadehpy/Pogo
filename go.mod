@@ -1,8 +1,9 @@
 module github.com/amirhasanzadehpy/Pogo
 
-go 1.22
+go 1.22.0
 
 require (
+	github.com/odvcencio/gotreesitter v0.47.1
 	github.com/tliron/commonlog v0.2.10
 	github.com/tliron/glsp v0.2.2
 )

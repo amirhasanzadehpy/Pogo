@@ -34,7 +34,11 @@
       "expect": {
         "id": 2,
         "result": {
-          "capabilities": {},
+          "capabilities": {
+            "textDocumentSync": {"openClose": true, "change": 2},
+            "completionProvider": {"triggerCharacters": ["."]},
+            "hoverProvider": true
+          },
           "serverInfo": {
             "name": "django-orm-lsp",
             "version": "0.1.0"

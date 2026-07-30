@@ -25,9 +25,9 @@ func RunStdio(ctx context.Context, cancel context.CancelFunc, workers ...Worker)
 	return lifecycle.ExitCode()
 }
 
-func RunStdioWithFactory(ctx context.Context, cancel context.CancelFunc, factory WorkerFactory) int {
+func RunStdioWithFactory(ctx context.Context, cancel context.CancelFunc, factory WorkerFactory, featureSets ...*Features) int {
 	logger := commonlog.GetLogger(ServerName)
-	lifecycle := NewLifecycleContextWithFactory(ctx, cancel, logger, factory)
+	lifecycle := NewLifecycleContextWithFactory(ctx, cancel, logger, factory, featureSets...)
 	defer lifecycle.StopWorker()
 	stdioServer := server.NewServer(lifecycle, ServerName, false)
 	stdioServer.Context = ctx

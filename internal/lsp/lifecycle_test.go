@@ -181,6 +181,56 @@ func TestInitializeInvalidParams(t *testing.T) {
 	}
 }
 
+func TestFeatureCapabilitiesAndDocumentNotifications(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	lifecycle := NewLifecycleContextWithFactory(context.Background(), func() {}, nil, nil, features)
+	result, validMethod, validParams, err := lifecycle.Handle(initializeContext(t))
+	if err != nil || !validMethod || !validParams {
+		t.Fatalf("initialize = (%T, %v, %v, %v)", result, validMethod, validParams, err)
+	}
+	initialized := result.(protocol.InitializeResult)
+	syncOptions, ok := initialized.Capabilities.TextDocumentSync.(protocol.TextDocumentSyncOptions)
+	if !ok || syncOptions.OpenClose == nil || !*syncOptions.OpenClose || syncOptions.Change == nil || *syncOptions.Change != protocol.TextDocumentSyncKindIncremental {
+		t.Fatalf("text synchronization capability = %#v", initialized.Capabilities.TextDocumentSync)
+	}
+	if initialized.Capabilities.CompletionProvider == nil || initialized.Capabilities.HoverProvider != true {
+		t.Fatalf("feature capabilities = %#v", initialized.Capabilities)
+	}
+	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodInitialized, Params: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	open := json.RawMessage(`{"textDocument":{"uri":"file:///feature.py","languageId":"python","version":1,"text":"from myapp.models import Book\nBook.objects.filter(au)"}}`)
+	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidOpen, Params: open}); err != nil || !validMethod || !validParams {
+		t.Fatalf("didOpen = (%v, %v, %v)", validMethod, validParams, err)
+	}
+	if _, ok := features.documents.Snapshot("file:///feature.py"); !ok {
+		t.Fatal("didOpen did not publish document")
+	}
+	change := json.RawMessage(`{"textDocument":{"uri":"file:///feature.py","version":2},"contentChanges":[{"range":{"start":{"line":1,"character":20},"end":{"line":1,"character":22}},"text":"auth"},{"range":{"start":{"line":1,"character":24},"end":{"line":1,"character":24}},"text":"or"}]}`)
+	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidChange, Params: change}); err != nil || !validMethod || !validParams {
+		t.Fatalf("didChange = (%v, %v, %v)", validMethod, validParams, err)
+	}
+	completionParams := json.RawMessage(`{"textDocument":{"uri":"file:///feature.py"},"position":{"line":1,"character":23}}`)
+	result, validMethod, validParams, err = lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentCompletion, Params: completionParams})
+	completion, ok := result.(*protocol.CompletionList)
+	if err != nil || !validMethod || !validParams || !ok || len(completion.Items) != 2 {
+		t.Fatalf("completion = (%T, %v, %v, %v)", result, validMethod, validParams, err)
+	}
+	hoverParams := json.RawMessage(`{"textDocument":{"uri":"file:///feature.py"},"position":{"line":1,"character":23}}`)
+	result, validMethod, validParams, err = lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentHover, Params: hoverParams})
+	if _, ok := result.(*protocol.Hover); err != nil || !validMethod || !validParams || !ok {
+		t.Fatalf("hover = (%T, %v, %v, %v)", result, validMethod, validParams, err)
+	}
+	closeParams := json.RawMessage(`{"textDocument":{"uri":"file:///feature.py"}}`)
+	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidClose, Params: closeParams}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := features.documents.Snapshot("file:///feature.py"); ok {
+		t.Fatal("didClose did not remove document")
+	}
+}
+
 func initializeContext(t *testing.T) *glsp.Context {
 	t.Helper()
 	params := json.RawMessage(`{"processId":null,"rootUri":null,"capabilities":{}}`)

@@ -19,14 +19,19 @@ type client struct {
 	nextID         uint64
 	requestTimeout time.Duration
 	poisoned       bool
+	onRequest      func()
 }
 
-func newClient(connection net.Conn, requestTimeout time.Duration) *client {
-	return &client{
+func newClient(connection net.Conn, requestTimeout time.Duration, hooks ...func()) *client {
+	client := &client{
 		connection:     connection,
 		reader:         bufio.NewReader(connection),
 		requestTimeout: requestTimeout,
 	}
+	if len(hooks) > 0 {
+		client.onRequest = hooks[0]
+	}
+	return client
 }
 
 func (client *client) Request(ctx context.Context, method string, result any) error {
@@ -34,6 +39,9 @@ func (client *client) Request(ctx context.Context, method string, result any) er
 	defer client.mu.Unlock()
 	if client.poisoned {
 		return errors.New("worker connection is unavailable")
+	}
+	if client.onRequest != nil {
+		client.onRequest()
 	}
 	client.nextID++
 	id := strconv.FormatUint(client.nextID, 10)

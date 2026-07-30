@@ -52,6 +52,12 @@ func run(args []string, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cache := &schema.Cache{}
+	features, err := lsp.NewFeatures(cache)
+	if err != nil {
+		fmt.Fprintf(stderr, "configure Python analysis: %v\n", err)
+		return 2
+	}
+	defer features.Close()
 	workerLogger := commonlog.GetLogger("django-worker")
 	factory := func(params *protocol.InitializeParams) (lsp.Worker, error) {
 		config, enabled, err := resolveWorkerConfig(*projectRoot, *pythonPath, *settingsModule, params)
@@ -60,7 +66,7 @@ func run(args []string, stderr io.Writer) int {
 		}
 		return pythonworker.NewManager(config, cache, workerLogger)
 	}
-	return lsp.RunStdioWithFactory(ctx, cancel, factory)
+	return lsp.RunStdioWithFactory(ctx, cancel, factory, features)
 }
 
 type initializationOptions struct {

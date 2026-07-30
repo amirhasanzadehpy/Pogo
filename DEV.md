@@ -38,8 +38,8 @@ make clean
 `make test` is non-installing and requires `make fixture-env` to have already
 completed. It checks Go formatting, runs `go vet`, runs Go tests, and runs both
 the fixture and daemon standard-library Python suites. `make test-race` runs the
-Go suite with race detection. `make bench` measures the lifecycle server's idle
-RSS; completion latency remains scoped N/A until its handler is introduced.
+Go suite with race detection. `make bench` measures parse-update, completion
+handler, end-to-end completion p50/p95, graph lookup, and server/worker RSS.
 
 `make build` writes `build/django-orm-lsp` and `build/testclient`. Run a traced
 lifecycle scenario with logs isolated from protocol stdout:
@@ -77,6 +77,12 @@ The worker starts after the LSP `initialized` notification, communicates over a
 private local endpoint using bounded protocol-v1 JSON frames, and is stopped and
 reaped on shutdown, exit, or stdio EOF. Worker and project output is forwarded
 to the language-server log and never to LSP stdout.
+
+Open Python documents are parsed incrementally in Go with only the Python
+grammar embedded in release builds. Direct Django model fields and managers are
+available through completion and hover once the schema cache is loaded. These
+hot handlers continue to use the last valid cache when the worker is unavailable
+and never issue worker requests.
 
 To run Django commands directly, invoke the virtual environment interpreter
 without activating it:

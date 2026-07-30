@@ -1,6 +1,7 @@
 PYTHON ?= python3
-GO_BUILD_FLAGS :=
-GO_TEST_FLAGS :=
+GO_GRAMMAR_TAGS := grammar_subset,grammar_subset_python
+GO_BUILD_FLAGS := -tags=$(GO_GRAMMAR_TAGS)
+GO_TEST_FLAGS := -tags=$(GO_GRAMMAR_TAGS)
 FIXTURE_DIR := testdata/sample_django_project
 FIXTURE_VENV := .venv-fixture
 FIXTURE_PYTHON := $(FIXTURE_VENV)/bin/python
@@ -9,8 +10,8 @@ FIXTURE_CONSTRAINTS := $(FIXTURE_DIR)/constraints.txt
 FIXTURE_STAMP := $(FIXTURE_VENV)/.requirements-installed
 
 ifeq ($(shell uname -s),Darwin)
-GO_BUILD_FLAGS := -ldflags=-linkmode=external
-GO_TEST_FLAGS := -ldflags=-linkmode=external
+GO_BUILD_FLAGS += -ldflags=-linkmode=external
+GO_TEST_FLAGS += -ldflags=-linkmode=external
 endif
 
 .PHONY: all build fixture-env test-env test test-race bench clean
@@ -38,7 +39,7 @@ test-env: fixture-env
 test:
 	@test -x "$(FIXTURE_PYTHON)" || { printf '%s\n' 'Fixture environment missing; run `make fixture-env` first.' >&2; exit 1; }
 	@GO_FILES=$$(git ls-files --cached --others --exclude-standard -- '*.go'); if test -n "$$GO_FILES"; then UNFORMATTED=$$(gofmt -l $$GO_FILES); test -z "$$UNFORMATTED" || { printf 'Unformatted Go files:\n%s\n' "$$UNFORMATTED" >&2; exit 1; }; fi
-	go vet ./...
+	go vet -tags=$(GO_GRAMMAR_TAGS) ./...
 	go test $(GO_TEST_FLAGS) ./...
 	PYTHONDONTWRITEBYTECODE=1 "$(FIXTURE_PYTHON)" -m unittest discover -s "$(FIXTURE_DIR)/tests" -p 'test_*.py' -v
 	PYTHONDONTWRITEBYTECODE=1 "$(FIXTURE_PYTHON)" -m unittest discover -s src/daemon -p 'test_*.py' -v
@@ -47,7 +48,7 @@ test-race:
 	go test -race $(GO_TEST_FLAGS) ./...
 
 bench: build
-	@printf '%s\n' 'Completion latency: N/A (introduced in Milestone 5)'
+	@go test $(GO_TEST_FLAGS) -run '^$$' -bench 'Benchmark(ParseUpdate|CompletionHandler|CompletionLatency)$$' -benchmem ./internal/lsp
 	@build/testclient -scenario testdata/requests/worker-lifecycle.json -- build/django-orm-lsp -project "$(FIXTURE_DIR)" -settings sample_project.settings -python "$(FIXTURE_PYTHON)"
 	@go test $(GO_TEST_FLAGS) -run '^$$' -bench BenchmarkGraphLookup -benchmem ./internal/schema
 

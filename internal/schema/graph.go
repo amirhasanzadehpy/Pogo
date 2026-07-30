@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -22,13 +23,18 @@ type Graph struct {
 }
 
 type modelIndex struct {
-	name      string
-	model     Model
-	fields    map[string]*FieldRef
-	attnames  map[string]*FieldRef
-	queries   map[string]*FieldRef
-	accessors map[string]*FieldRef
-	managers  map[string]*ManagerRef
+	name           string
+	model          Model
+	fields         map[string]*FieldRef
+	attnames       map[string]*FieldRef
+	queries        map[string]*FieldRef
+	accessors      map[string]*FieldRef
+	managers       map[string]*ManagerRef
+	queryAccess    []FieldAccess
+	instanceAccess []FieldAccess
+	managerOrder   []*ManagerRef
+	queryByName    map[string]FieldAccess
+	instanceByName map[string]FieldAccess
 }
 
 type FieldRef struct {
@@ -38,6 +44,20 @@ type FieldRef struct {
 
 type ManagerRef struct {
 	manager Manager
+}
+
+type FieldAccessKind uint8
+
+const (
+	FieldAccessDeclared FieldAccessKind = iota
+	FieldAccessAttname
+	FieldAccessReverse
+)
+
+type FieldAccess struct {
+	Name  string
+	Kind  FieldAccessKind
+	Field *FieldRef
 }
 
 type ModelInfo struct {
@@ -253,13 +273,15 @@ func validateRange(sourceRange *SourceRange) error {
 
 func buildModelIndex(name string, model Model) (*modelIndex, error) {
 	index := &modelIndex{
-		name:      name,
-		model:     model,
-		fields:    make(map[string]*FieldRef, len(model.Fields)),
-		attnames:  make(map[string]*FieldRef),
-		queries:   make(map[string]*FieldRef),
-		accessors: make(map[string]*FieldRef),
-		managers:  make(map[string]*ManagerRef, len(model.Managers)),
+		name:           name,
+		model:          model,
+		fields:         make(map[string]*FieldRef, len(model.Fields)),
+		attnames:       make(map[string]*FieldRef),
+		queries:        make(map[string]*FieldRef),
+		accessors:      make(map[string]*FieldRef),
+		managers:       make(map[string]*ManagerRef, len(model.Managers)),
+		queryByName:    make(map[string]FieldAccess),
+		instanceByName: make(map[string]FieldAccess),
 	}
 	for fieldName, field := range model.Fields {
 		fieldReference := &FieldRef{field: field}
@@ -290,9 +312,72 @@ func buildModelIndex(name string, model Model) (*modelIndex, error) {
 		}
 	}
 	for _, manager := range model.Managers {
-		index.managers[manager.Name] = &ManagerRef{manager: manager}
+		reference := &ManagerRef{manager: manager}
+		index.managers[manager.Name] = reference
+		index.managerOrder = append(index.managerOrder, reference)
 	}
+	for _, field := range index.fields {
+		if field.field.RelationDirection != nil && *field.field.RelationDirection == "reverse" {
+			queryName := field.field.Name
+			if field.field.QueryName != nil && *field.field.QueryName != "" {
+				queryName = *field.field.QueryName
+			}
+			instanceName := field.field.Name
+			if field.field.AccessorName != nil && *field.field.AccessorName != "" {
+				instanceName = *field.field.AccessorName
+			}
+			index.addAccess(queryName, FieldAccessReverse, field, true)
+			index.addAccess(instanceName, FieldAccessReverse, field, false)
+			continue
+		}
+		index.addAccess(field.field.Name, FieldAccessDeclared, field, true)
+		index.addAccess(field.field.Name, FieldAccessDeclared, field, false)
+		if field.field.Attname != nil && *field.field.Attname != "" && *field.field.Attname != field.field.Name {
+			index.addAccess(*field.field.Attname, FieldAccessAttname, field, true)
+			index.addAccess(*field.field.Attname, FieldAccessAttname, field, false)
+		}
+	}
+	sort.Slice(index.queryAccess, func(left, right int) bool { return accessLess(index.queryAccess[left], index.queryAccess[right]) })
+	sort.Slice(index.instanceAccess, func(left, right int) bool { return accessLess(index.instanceAccess[left], index.instanceAccess[right]) })
+	sort.Slice(index.managerOrder, func(left, right int) bool { return index.managerOrder[left].Name() < index.managerOrder[right].Name() })
 	return index, nil
+}
+
+func (index *modelIndex) addAccess(name string, kind FieldAccessKind, field *FieldRef, query bool) {
+	if name == "" || name == "+" {
+		return
+	}
+	access := FieldAccess{Name: name, Kind: kind, Field: field}
+	byName := index.instanceByName
+	if query {
+		byName = index.queryByName
+	}
+	if existing, exists := byName[name]; exists && existing.Kind <= kind {
+		return
+	}
+	byName[name] = access
+	if query {
+		index.queryAccess = replaceAccess(index.queryAccess, access)
+	} else {
+		index.instanceAccess = replaceAccess(index.instanceAccess, access)
+	}
+}
+
+func replaceAccess(accesses []FieldAccess, replacement FieldAccess) []FieldAccess {
+	for index, access := range accesses {
+		if access.Name == replacement.Name {
+			accesses[index] = replacement
+			return accesses
+		}
+	}
+	return append(accesses, replacement)
+}
+
+func accessLess(left, right FieldAccess) bool {
+	if left.Kind != right.Kind {
+		return left.Kind < right.Kind
+	}
+	return left.Name < right.Name
 }
 
 func (graph *Graph) ModelCount() int {
@@ -316,6 +401,17 @@ func (graph *Graph) HasClass(classPath string) bool {
 	}
 	_, exists := graph.classPath[classPath]
 	return exists
+}
+
+func (graph *Graph) CanonicalLabelForClass(classPath string) (string, bool) {
+	if graph == nil {
+		return "", false
+	}
+	index := graph.classPath[classPath]
+	if index == nil {
+		return "", false
+	}
+	return index.model.CanonicalLabel, true
 }
 
 func (graph *Graph) ModelInfo(canonicalLabel string) (ModelInfo, bool) {
@@ -404,9 +500,78 @@ func (graph *Graph) Manager(canonicalLabel, name string) (*ManagerRef, bool) {
 	return manager, exists
 }
 
+func (graph *Graph) VisitQueryFields(canonicalLabel string, visit func(FieldAccess) bool) bool {
+	return graph.visitFields(canonicalLabel, true, visit)
+}
+
+func (graph *Graph) VisitInstanceFields(canonicalLabel string, visit func(FieldAccess) bool) bool {
+	return graph.visitFields(canonicalLabel, false, visit)
+}
+
+func (graph *Graph) visitFields(canonicalLabel string, query bool, visit func(FieldAccess) bool) bool {
+	if graph == nil {
+		return false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil {
+		return false
+	}
+	accesses := index.instanceAccess
+	if query {
+		accesses = index.queryAccess
+	}
+	for _, access := range accesses {
+		if !visit(access) {
+			break
+		}
+	}
+	return true
+}
+
+func (graph *Graph) VisitManagers(canonicalLabel string, visit func(*ManagerRef) bool) bool {
+	if graph == nil {
+		return false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil {
+		return false
+	}
+	for _, manager := range index.managerOrder {
+		if !visit(manager) {
+			break
+		}
+	}
+	return true
+}
+
+func (graph *Graph) QueryAccess(canonicalLabel, name string) (FieldAccess, bool) {
+	if graph == nil || graph.canonical[canonicalLabel] == nil {
+		return FieldAccess{}, false
+	}
+	access, exists := graph.canonical[canonicalLabel].queryByName[name]
+	return access, exists
+}
+
+func (graph *Graph) InstanceAccess(canonicalLabel, name string) (FieldAccess, bool) {
+	if graph == nil || graph.canonical[canonicalLabel] == nil {
+		return FieldAccess{}, false
+	}
+	access, exists := graph.canonical[canonicalLabel].instanceByName[name]
+	return access, exists
+}
+
 func (field *FieldRef) Name() string { return field.field.Name }
 
 func (field *FieldRef) HelpText() string { return field.field.HelpText }
+
+func (field *FieldRef) Type() string { return field.field.Type }
+
+func (field *FieldRef) DBColumn() (string, bool) {
+	if field == nil || field.field.DBColumn == nil {
+		return "", false
+	}
+	return *field.field.DBColumn, true
+}
 
 func (field *FieldRef) DBType() (string, bool) {
 	if field == nil || field.field.DBType == nil {
@@ -417,7 +582,18 @@ func (field *FieldRef) DBType() (string, bool) {
 
 func (field *FieldRef) IsNullable() bool { return field != nil && field.field.Null }
 
+func (field *FieldRef) IsDBIndexed() bool { return field != nil && field.field.DBIndex }
+
+func (field *FieldRef) IsUnique() bool { return field != nil && field.field.Unique }
+
 func (field *FieldRef) IsPrimaryKey() bool { return field != nil && field.field.PrimaryKey }
+
+func (field *FieldRef) SourceModel() string {
+	if field == nil {
+		return ""
+	}
+	return field.field.SourceModel
+}
 
 func (field *FieldRef) RelatedModel() (string, bool) {
 	if field == nil || field.related == nil {
@@ -427,6 +603,8 @@ func (field *FieldRef) RelatedModel() (string, bool) {
 }
 
 func (manager *ManagerRef) Name() string { return manager.manager.Name }
+
+func (manager *ManagerRef) OwnerClass() string { return manager.manager.OwnerClass }
 
 func cloneSnapshot(snapshot Snapshot) (Snapshot, error) {
 	payload, err := json.Marshal(snapshot)
