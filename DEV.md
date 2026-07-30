@@ -36,10 +36,10 @@ make clean
 ```
 
 `make test` is non-installing and requires `make fixture-env` to have already
-completed. It checks Go formatting, runs `go vet`, runs Go tests, and runs the
-fixture's standard-library Python test suite. `make test-race` runs the Go suite
-with race detection. `make bench` measures the lifecycle server's idle RSS;
-completion latency remains scoped N/A until its handler is introduced.
+completed. It checks Go formatting, runs `go vet`, runs Go tests, and runs both
+the fixture and daemon standard-library Python suites. `make test-race` runs the
+Go suite with race detection. `make bench` measures the lifecycle server's idle
+RSS; completion latency remains scoped N/A until its handler is introduced.
 
 `make build` writes `build/django-orm-lsp` and `build/testclient`. Run a traced
 lifecycle scenario with logs isolated from protocol stdout:
@@ -50,6 +50,18 @@ build/testclient \
   -trace-methods \
   -- build/django-orm-lsp -log-file build/protocol.log
 ```
+
+Dump the fixture's runtime ORM schema as deterministic compact JSON:
+
+```sh
+.venv-fixture/bin/python src/daemon/introspect.py \
+  --project testdata/sample_django_project
+```
+
+Pass `--pretty` for indented output or `--settings sample_project.settings` to
+select the settings module explicitly. Introspection starts Django and executes
+trusted project imports; its JSON stdout must not be mixed with diagnostic
+output.
 
 To run Django commands directly, invoke the virtual environment interpreter
 without activating it:
