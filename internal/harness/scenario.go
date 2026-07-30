@@ -26,6 +26,13 @@ type Step struct {
 	ExpectEOF       bool             `json:"expect_eof,omitempty"`
 	SampleRSS       bool             `json:"sample_rss,omitempty"`
 	SampleWorkerRSS bool             `json:"sample_worker_rss,omitempty"`
+	SampleAllRSS    *RSSSampleSpec   `json:"sample_all_rss,omitempty"`
+}
+
+type RSSSampleSpec struct {
+	Count      int `json:"count"`
+	SettleMS   int `json:"settle_ms,omitempty"`
+	IntervalMS int `json:"interval_ms,omitempty"`
 }
 
 type ExpectedMessage struct {
@@ -100,6 +107,15 @@ func (scenario Scenario) Validate() error {
 		}
 		if step.SampleWorkerRSS {
 			actions++
+		}
+		if step.SampleAllRSS != nil {
+			actions++
+			if step.SampleAllRSS.Count <= 0 || step.SampleAllRSS.Count > 1000 {
+				return fmt.Errorf("step %d sample_all_rss count must be between 1 and 1000", index+1)
+			}
+			if step.SampleAllRSS.SettleMS < 0 || step.SampleAllRSS.IntervalMS < 0 {
+				return fmt.Errorf("step %d sample_all_rss durations cannot be negative", index+1)
+			}
 		}
 		if actions != 1 {
 			return fmt.Errorf("step %d must contain exactly one action", index+1)

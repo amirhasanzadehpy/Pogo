@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  django-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        django: ["42", "52"]
+        exclude:
+          - python: "3.13"
+            django: "42"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: make fixture-env FIXTURE_CONSTRAINTS=testdata/sample_django_project/constraints-django${{ matrix.django }}.txt
+      - run: make test
+      - run: make build
+      - run: build/testclient -scenario testdata/requests/worker-lifecycle.json -- build/django-orm-lsp -project testdata/sample_django_project -settings sample_project.settings -python .venv-fixture/bin/python
+
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: make fixture-env
+      - run: make test-race
+
+  native-transport:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - shell: bash
+        run: |
+          python -m venv .venv-fixture
+          if [[ "$RUNNER_OS" == "Windows" ]]; then PY=.venv-fixture/Scripts/python.exe; else PY=.venv-fixture/bin/python; fi
+          "$PY" -m pip install -r testdata/sample_django_project/requirements.txt -c testdata/sample_django_project/constraints-django52.txt
+      - shell: bash
+        run: |
+          EXTRA=()
+          if [[ "$RUNNER_OS" == "macOS" ]]; then EXTRA=(-ldflags=-linkmode=external); fi
+          go test -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" ./...
+          go build -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" ./cmd/django-orm-lsp ./cmd/testclient
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/django-orm-lsp ./cmd/testclient
+      - run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/django-orm-lsp ./cmd/testclient
+      - run: make release-check
+
+  performance-gates:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: make fixture-env
+      - run: make bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ runner.os }}
+          path: benchmark-results/

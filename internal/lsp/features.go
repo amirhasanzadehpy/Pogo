@@ -12,6 +12,8 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
+var markdownTextReplacer = strings.NewReplacer("\\", "\\\\", "*", "\\*", "_", "\\_", "`", "\\`", "[", "\\[", "]", "\\]")
+
 type Features struct {
 	documents    *analysis.Store
 	cache        *schema.Cache
@@ -446,8 +448,7 @@ func protocolPosition(position analysis.Position) protocol.Position {
 }
 
 func markdownText(value string) string {
-	replacer := strings.NewReplacer("\\", "\\\\", "*", "\\*", "_", "\\_", "`", "\\`", "[", "\\[", "]", "\\]")
-	return replacer.Replace(value)
+	return markdownTextReplacer.Replace(value)
 }
 
 func markdownCode(value string) string {

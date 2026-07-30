@@ -14,7 +14,7 @@ GO_BUILD_FLAGS += -ldflags=-linkmode=external
 GO_TEST_FLAGS += -ldflags=-linkmode=external
 endif
 
-.PHONY: all build fixture-env test-env test test-race bench clean
+.PHONY: all build fixture-env test-env test test-race fuzz bench bench-profile compat release-check clean
 
 all: build
 
@@ -47,11 +47,24 @@ test:
 test-race:
 	go test -race $(GO_TEST_FLAGS) ./...
 
+fuzz:
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzIPCReadFrame$$' -fuzztime=30s ./internal/python
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzLSPReadFrame$$' -fuzztime=30s ./internal/harness
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzUTF16PositionRoundTrip$$' -fuzztime=30s ./internal/analysis
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzUTF16EditMatchesFullParse$$' -fuzztime=30s ./internal/analysis
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzORMPathExtraction$$' -fuzztime=30s ./internal/analysis
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzStoreParserRecovery$$' -fuzztime=30s ./internal/analysis
+
 bench: build
-	@go test $(GO_TEST_FLAGS) -run '^$$' -bench 'Benchmark(ParseUpdate|CompletionHandler|CompletionLatency|DiagnosticHandler|DiagnosticLatency|DefinitionHandler|DocumentLinkHandler)$$' -benchmem ./internal/lsp
-	@build/testclient -scenario testdata/requests/worker-lifecycle.json -- build/django-orm-lsp -project "$(FIXTURE_DIR)" -settings sample_project.settings -python "$(FIXTURE_PYTHON)"
-	@go test $(GO_TEST_FLAGS) -run '^$$' -bench BenchmarkGraphLookup -benchmem ./internal/schema
-	@go test $(GO_TEST_FLAGS) -run '^$$' -bench BenchmarkManagerRefresh -benchtime=3x -benchmem ./internal/python
+	@"$(PYTHON)" scripts/bench.py
+
+bench-profile: bench
+
+compat:
+	@"$(PYTHON)" scripts/compat.py
+
+release-check: build
+	@"$(PYTHON)" scripts/check_release.py build/django-orm-lsp build/testclient
 
 clean:
 	rm -rf "$(FIXTURE_VENV)" build bin benchmark-results

@@ -42,6 +42,8 @@ type Lifecycle struct {
 	log                      commonlog.Logger
 	handler                  protocol.Handler
 	worker                   Worker
+	workerStop               sync.Once
+	workerStopErr            error
 	factory                  WorkerFactory
 	workerConfigurationError error
 	features                 *Features
@@ -310,15 +312,15 @@ func (lifecycle *Lifecycle) stopWorker(reason string) error {
 	if lifecycle.worker == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := lifecycle.worker.Stop(ctx); err != nil {
-		if lifecycle.log != nil {
-			lifecycle.log.Errorf("stop Python worker during %s: %s", reason, err)
+	lifecycle.workerStop.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		lifecycle.workerStopErr = lifecycle.worker.Stop(ctx)
+		if lifecycle.workerStopErr != nil && lifecycle.log != nil {
+			lifecycle.log.Errorf("stop Python worker during %s: %s", reason, lifecycle.workerStopErr)
 		}
-		return err
-	}
-	return nil
+	})
+	return lifecycle.workerStopErr
 }
 
 func (lifecycle *Lifecycle) info(message string) {

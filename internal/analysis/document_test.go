@@ -1,8 +1,11 @@
 package analysis
 
 import (
+	"bytes"
+	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestStoreOpenIncrementalFullAndClose(t *testing.T) {
@@ -134,6 +137,99 @@ func FuzzStoreParserRecovery(f *testing.F) {
 			t.Fatalf("full recovery change: %v", err)
 		}
 		store.Close(uri)
+	})
+}
+
+func FuzzUTF16PositionRoundTrip(f *testing.F) {
+	for _, seed := range []string{"ascii\ntext", "café\r\n😀 value", "日本語\nBook.objects.filter()"} {
+		f.Add(seed, uint16(0))
+	}
+	f.Fuzz(func(t *testing.T, text string, rawOffset uint16) {
+		source := []byte(text)
+		if len(source) == 0 || len(source) > 64*1024 || !utf8.Valid(source) {
+			t.Skip()
+		}
+		offset := int(rawOffset) % (len(source) + 1)
+		if offset < len(source) && !utf8.RuneStart(source[offset]) {
+			return
+		}
+		position, ok := PositionAt(source, offset)
+		if !ok {
+			t.Fatalf("PositionAt() rejected UTF-8 boundary %d", offset)
+		}
+		roundTrip, ok := ByteOffset(source, position)
+		if !ok {
+			if offset > 0 && offset < len(source) && source[offset-1] == '\r' && source[offset] == '\n' {
+				return
+			}
+			t.Fatalf("ByteOffset() rejected %#v from boundary %d", position, offset)
+		}
+		if roundTrip != offset {
+			t.Fatalf("offset %d -> %#v -> %d", offset, position, roundTrip)
+		}
+	})
+}
+
+func FuzzUTF16EditMatchesFullParse(f *testing.F) {
+	f.Add("value = '😀'\nBook.objects.filter(author__name=1)\n", uint16(8), uint16(12), "café")
+	f.Add("from app.models import Book\r\nBook.objects.values(\"title\")\r\n", uint16(0), uint16(4), "import")
+	f.Fuzz(func(t *testing.T, text string, rawStart, rawEnd uint16, replacement string) {
+		source := []byte(text)
+		if len(source) == 0 || len(source) > 16*1024 || len(replacement) > 4096 || !utf8.Valid(source) || !utf8.ValidString(replacement) {
+			t.Skip()
+		}
+		boundaries := []int{0}
+		for offset := range source {
+			if offset > 0 && utf8.RuneStart(source[offset]) {
+				boundaries = append(boundaries, offset)
+			}
+		}
+		boundaries = append(boundaries, len(source))
+		start := boundaries[int(rawStart)%len(boundaries)]
+		end := boundaries[int(rawEnd)%len(boundaries)]
+		if start > end {
+			start, end = end, start
+		}
+		startPosition, startOK := PositionAt(source, start)
+		endPosition, endOK := PositionAt(source, end)
+		if !startOK || !endOK {
+			t.Fatalf("PositionAt() rejected edit boundaries %d:%d", start, end)
+		}
+		if offset, ok := ByteOffset(source, startPosition); !ok || offset != start {
+			if !(start > 0 && start < len(source) && source[start-1] == '\r' && source[start] == '\n') {
+				t.Fatalf("start position %#v round trip = %d, %v", startPosition, offset, ok)
+			}
+			return
+		}
+		if offset, ok := ByteOffset(source, endPosition); !ok || offset != end {
+			if !(end > 0 && end < len(source) && source[end-1] == '\r' && source[end] == '\n') {
+				t.Fatalf("end position %#v round trip = %d, %v", endPosition, offset, ok)
+			}
+			return
+		}
+		final := append(append(append([]byte(nil), source[:start]...), replacement...), source[end:]...)
+		if len(final) > MaxDocumentSize {
+			return
+		}
+
+		incremental := newTestStore(t)
+		defer incremental.CloseAll()
+		fresh := newTestStore(t)
+		defer fresh.CloseAll()
+		if err := incremental.Open("file:///incremental.py", 1, text); err != nil {
+			return
+		}
+		if err := incremental.Change("file:///incremental.py", 2, []Change{{Range: &Range{Start: startPosition, End: endPosition}, Text: replacement}}); err != nil {
+			t.Fatalf("incremental change: %v", err)
+		}
+		if err := fresh.Open("file:///fresh.py", 1, string(final)); err != nil {
+			t.Fatalf("fresh open: %v", err)
+		}
+		got, _ := incremental.Snapshot("file:///incremental.py")
+		want, _ := fresh.Snapshot("file:///fresh.py")
+		if !bytes.Equal(got.Source, want.Source) || got.Parsed != want.Parsed || !reflect.DeepEqual(got.Syntax, want.Syntax) || !reflect.DeepEqual(got.Calls, want.Calls) {
+			t.Fatalf("incremental snapshot differs from full parse\ngot syntax=%#v calls=%#v\nwant syntax=%#v calls=%#v", got.Syntax, got.Calls, want.Syntax, want.Calls)
+		}
 	})
 }
 

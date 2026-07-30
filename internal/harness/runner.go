@@ -18,10 +18,13 @@ import (
 )
 
 type Result struct {
-	ExitCode       int
-	RSSBytes       uint64
-	WorkerRSSBytes uint64
-	Stderr         string
+	ExitCode         int      `json:"exit_code"`
+	RSSBytes         uint64   `json:"go_rss_bytes,omitempty"`
+	WorkerRSSBytes   uint64   `json:"worker_rss_bytes,omitempty"`
+	RSSSamples       []uint64 `json:"go_rss_samples,omitempty"`
+	WorkerRSSSamples []uint64 `json:"worker_rss_samples,omitempty"`
+	CombinedSamples  []uint64 `json:"combined_rss_samples,omitempty"`
+	Stderr           string   `json:"stderr,omitempty"`
 }
 
 type readEvent struct {
@@ -202,7 +205,8 @@ func RunScenario(parent context.Context, scenario Scenario, command []string, tr
 				return result, fmt.Errorf("step %d: %w", index+1, err)
 			}
 			if supported {
-				result.RSSBytes = rss
+				result.RSSBytes = max(result.RSSBytes, rss)
+				result.RSSSamples = append(result.RSSSamples, rss)
 				fmt.Fprintf(trace, "RSS %.2f MB\n", float64(rss)/(1024*1024))
 			} else {
 				fmt.Fprintln(trace, "RSS unavailable on this platform")
@@ -213,10 +217,15 @@ func RunScenario(parent context.Context, scenario Scenario, command []string, tr
 				return result, fmt.Errorf("step %d: %w", index+1, err)
 			}
 			if supported {
-				result.WorkerRSSBytes = rss
+				result.WorkerRSSBytes = max(result.WorkerRSSBytes, rss)
+				result.WorkerRSSSamples = append(result.WorkerRSSSamples, rss)
 				fmt.Fprintf(trace, "WORKER RSS %.2f MB\n", float64(rss)/(1024*1024))
 			} else {
 				fmt.Fprintln(trace, "WORKER RSS unavailable on this platform")
+			}
+		case step.SampleAllRSS != nil:
+			if err := sampleAllRSS(ctx, cmd.Process.Pid, *step.SampleAllRSS, &result, trace); err != nil {
+				return result, fmt.Errorf("step %d: %w", index+1, err)
 			}
 		}
 	}
@@ -246,6 +255,88 @@ func RunScenario(parent context.Context, scenario Scenario, command []string, tr
 		return result, fmt.Errorf("server exit code %d, expected %d", result.ExitCode, scenario.ExpectExitCode)
 	}
 	return result, nil
+}
+
+func sampleAllRSS(ctx context.Context, pid int, spec RSSSampleSpec, result *Result, trace io.Writer) error {
+	if spec.SettleMS > 0 {
+		select {
+		case <-time.After(time.Duration(spec.SettleMS) * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	for index := 0; index < spec.Count; index++ {
+		goRSS, workerRSS, supported, err := sampleProcessTreeRSS(ctx, pid)
+		if err != nil {
+			return err
+		}
+		if supported {
+			result.RSSSamples = append(result.RSSSamples, goRSS)
+			result.WorkerRSSSamples = append(result.WorkerRSSSamples, workerRSS)
+			result.CombinedSamples = append(result.CombinedSamples, goRSS+workerRSS)
+			result.RSSBytes = max(result.RSSBytes, goRSS)
+			result.WorkerRSSBytes = max(result.WorkerRSSBytes, workerRSS)
+		}
+		if index+1 < spec.Count && spec.IntervalMS > 0 {
+			select {
+			case <-time.After(time.Duration(spec.IntervalMS) * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	if len(result.CombinedSamples) == 0 {
+		fmt.Fprintln(trace, "RSS unavailable on this platform")
+		return nil
+	}
+	fmt.Fprintf(trace, "RSS samples=%d Go-max=%.2f MiB worker-max=%.2f MiB combined-max=%.2f MiB\n",
+		len(result.CombinedSamples), float64(result.RSSBytes)/(1024*1024), float64(result.WorkerRSSBytes)/(1024*1024), float64(maximum(result.CombinedSamples))/(1024*1024))
+	return nil
+}
+
+func sampleProcessTreeRSS(ctx context.Context, parentPID int) (uint64, uint64, bool, error) {
+	if runtime.GOOS == "windows" {
+		return 0, 0, false, nil
+	}
+	output, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,rss=").Output()
+	if err != nil {
+		return 0, 0, true, fmt.Errorf("sample process tree RSS: %w", err)
+	}
+	var parentRSS uint64
+	var workerRSS uint64
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		ppid, ppidErr := strconv.Atoi(fields[1])
+		kilobytes, rssErr := strconv.ParseUint(fields[2], 10, 64)
+		if pidErr != nil || ppidErr != nil || rssErr != nil {
+			continue
+		}
+		if pid == parentPID {
+			parentRSS = kilobytes * 1024
+		}
+		if ppid == parentPID {
+			workerRSS += kilobytes * 1024
+		}
+	}
+	if parentRSS == 0 {
+		return 0, 0, true, errors.New("server process missing from RSS snapshot")
+	}
+	if workerRSS == 0 {
+		return 0, 0, true, errors.New("worker process missing from RSS snapshot")
+	}
+	return parentRSS, workerRSS, true, nil
+}
+
+func maximum(values []uint64) uint64 {
+	var value uint64
+	for _, candidate := range values {
+		value = max(value, candidate)
+	}
+	return value
 }
 
 func receiveEvent(ctx context.Context, events <-chan readEvent) (readEvent, error) {

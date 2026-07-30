@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -68,6 +69,7 @@ type Store struct {
 	mu         sync.RWMutex
 	documents  map[string]*document
 	language   *gotreesitter.Language
+	parsers    *gotreesitter.ParserPool
 	statements *gotreesitter.Query
 	scopes     *gotreesitter.Query
 	guarded    *gotreesitter.Query
@@ -109,7 +111,10 @@ func NewStore() (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compile Python call query: %w", err)
 	}
-	return &Store{documents: make(map[string]*document), language: language, statements: statements, scopes: scopes, guarded: guarded, calls: calls}, nil
+	return &Store{
+		documents: make(map[string]*document), language: language, parsers: gotreesitter.NewParserPool(language),
+		statements: statements, scopes: scopes, guarded: guarded, calls: calls,
+	}, nil
 }
 
 func (store *Store) Open(uri string, version int32, text string) error {
@@ -151,6 +156,10 @@ func (store *Store) Change(uri string, version int32, changes []Change) error {
 	source := append([]byte(nil), current.source...)
 	oldTree := current.tree
 	incremental := oldTree != nil
+	if incremental {
+		root := oldTree.RootNode()
+		incremental = root != nil && !root.HasError() && !hasNonASCII(source)
+	}
 	var edits []gotreesitter.InputEdit
 	for _, change := range changes {
 		if change.Range == nil {
@@ -185,6 +194,9 @@ func (store *Store) Change(uri string, version int32, changes []Change) error {
 		updated = append(updated, source[:start]...)
 		updated = append(updated, replacement...)
 		updated = append(updated, source[end:]...)
+		if err := validateSource(updated); err != nil {
+			return err
+		}
 		source = updated
 	}
 	if err := validateSource(source); err != nil {
@@ -203,6 +215,14 @@ func (store *Store) Change(uri string, version int32, changes []Change) error {
 	var err error
 	if incremental {
 		tree, err = store.parse(source, incrementalTree)
+		if err == nil && tree != nil {
+			root := tree.RootNode()
+			if root == nil || root.HasError() {
+				tree.Release()
+				tree = nil
+				incremental = false
+			}
+		}
 	}
 	if !incremental || err != nil {
 		tree, err = store.parse(source, nil)
@@ -543,11 +563,12 @@ func parameterStatements(source []byte, scopeStart, scopeEnd int) []SyntaxStatem
 }
 
 func (store *Store) parse(source []byte, oldTree *gotreesitter.Tree) (*gotreesitter.Tree, error) {
-	parser := gotreesitter.NewParser(store.language)
-	if oldTree == nil {
-		return parser.Parse(source)
+	var options []gotreesitter.ParseOption
+	if oldTree != nil {
+		options = append(options, gotreesitter.WithOldTree(oldTree))
 	}
-	return parser.ParseIncremental(source, oldTree)
+	result, err := store.parsers.ParseWith(source, options...)
+	return result.Tree, err
 }
 
 func ByteOffset(source []byte, position Position) (int, bool) {
@@ -631,30 +652,31 @@ func lineBounds(source []byte, target uint32) (int, int, bool) {
 }
 
 func pointForOffset(source []byte, offset int) gotreesitter.Point {
-	row := uint32(0)
-	column := uint32(0)
-	for _, value := range source[:offset] {
-		if value == '\n' {
-			row++
-			column = 0
-		} else {
-			column++
-		}
+	prefix := source[:offset]
+	row := uint32(bytes.Count(prefix, []byte{'\n'}))
+	column := offset
+	if newline := bytes.LastIndexByte(prefix, '\n'); newline >= 0 {
+		column = offset - newline - 1
 	}
-	return gotreesitter.Point{Row: row, Column: column}
+	return gotreesitter.Point{Row: row, Column: uint32(column)}
 }
 
 func replacementEndPoint(start gotreesitter.Point, replacement []byte) gotreesitter.Point {
-	point := start
-	for _, value := range replacement {
-		if value == '\n' {
-			point.Row++
-			point.Column = 0
-		} else {
-			point.Column++
+	newlines := bytes.Count(replacement, []byte{'\n'})
+	if newlines == 0 {
+		return gotreesitter.Point{Row: start.Row, Column: start.Column + uint32(len(replacement))}
+	}
+	lastNewline := bytes.LastIndexByte(replacement, '\n')
+	return gotreesitter.Point{Row: start.Row + uint32(newlines), Column: uint32(len(replacement) - lastNewline - 1)}
+}
+
+func hasNonASCII(source []byte) bool {
+	for _, value := range source {
+		if value >= utf8.RuneSelf {
+			return true
 		}
 	}
-	return point
+	return false
 }
 
 func validateSource(source []byte) error {

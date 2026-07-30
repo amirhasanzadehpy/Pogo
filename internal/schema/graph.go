@@ -3,7 +3,6 @@ package schema
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1335,15 +1334,146 @@ func cloneLookupPath(path LookupPath) LookupPath {
 }
 
 func cloneSnapshot(snapshot Snapshot) (Snapshot, error) {
-	payload, err := json.Marshal(snapshot)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("clone snapshot: %w", err)
-	}
-	var clone Snapshot
-	if err := json.Unmarshal(payload, &clone); err != nil {
-		return Snapshot{}, fmt.Errorf("clone snapshot: %w", err)
+	clone := snapshot
+	clone.SchemaSources = cloneStrings(snapshot.SchemaSources)
+	clone.Apps = make(map[string]App, len(snapshot.Apps))
+	for name, app := range snapshot.Apps {
+		clone.Apps[name] = cloneApp(app)
 	}
 	return clone, nil
+}
+
+func cloneApp(app App) App {
+	clone := app
+	clone.Models = make(map[string]Model, len(app.Models))
+	for name, model := range app.Models {
+		clone.Models[name] = cloneModel(model)
+	}
+	return clone
+}
+
+func cloneModel(model Model) Model {
+	clone := model
+	clone.SourceRange = clonePointer(model.SourceRange)
+	clone.Docstring = clonePointer(model.Docstring)
+	clone.Parents = cloneSlice(model.Parents)
+	for index := range clone.Parents {
+		clone.Parents[index].ParentLink = clonePointer(model.Parents[index].ParentLink)
+		clone.Parents[index].SourceRange = clonePointer(model.Parents[index].SourceRange)
+	}
+	clone.CustomManagers = cloneStrings(model.CustomManagers)
+	clone.Managers = cloneSlice(model.Managers)
+	for index := range clone.Managers {
+		clone.Managers[index] = cloneManager(model.Managers[index])
+	}
+	clone.QuerySetMethods = cloneMethods(model.QuerySetMethods)
+	clone.Indexes = cloneSlice(model.Indexes)
+	for index := range clone.Indexes {
+		clone.Indexes[index] = cloneIndex(model.Indexes[index])
+	}
+	clone.Constraints = cloneSlice(model.Constraints)
+	for index := range clone.Constraints {
+		clone.Constraints[index] = cloneConstraint(model.Constraints[index])
+	}
+	clone.Fields = make(map[string]Field, len(model.Fields))
+	for name, field := range model.Fields {
+		clone.Fields[name] = cloneField(field)
+	}
+	return clone
+}
+
+func cloneManager(manager Manager) Manager {
+	clone := manager
+	clone.QuerySetClass = clonePointer(manager.QuerySetClass)
+	clone.SourceRange = clonePointer(manager.SourceRange)
+	clone.Methods = cloneMethods(manager.Methods)
+	clone.QuerySetMethods = cloneSlice(manager.QuerySetMethods)
+	for index := range clone.QuerySetMethods {
+		clone.QuerySetMethods[index].Method = cloneMethod(manager.QuerySetMethods[index].Method)
+	}
+	return clone
+}
+
+func cloneMethods(methods []Method) []Method {
+	clone := cloneSlice(methods)
+	for index := range clone {
+		clone[index] = cloneMethod(methods[index])
+	}
+	return clone
+}
+
+func cloneMethod(method Method) Method {
+	clone := method
+	clone.Signature = clonePointer(method.Signature)
+	clone.Docstring = clonePointer(method.Docstring)
+	clone.SourceRange = clonePointer(method.SourceRange)
+	return clone
+}
+
+func cloneField(field Field) Field {
+	clone := field
+	clone.RelatedModel = clonePointer(field.RelatedModel)
+	clone.RuntimeRelatedModel = clonePointer(field.RuntimeRelatedModel)
+	clone.Lookups = cloneStrings(field.Lookups)
+	clone.UnsupportedLookups = cloneStrings(field.UnsupportedLookups)
+	clone.Attname = clonePointer(field.Attname)
+	clone.DBColumn = clonePointer(field.DBColumn)
+	clone.DBType = clonePointer(field.DBType)
+	clone.RelationCardinality = clonePointer(field.RelationCardinality)
+	clone.RelationDirection = clonePointer(field.RelationDirection)
+	clone.AccessorName = clonePointer(field.AccessorName)
+	clone.QueryName = clonePointer(field.QueryName)
+	clone.SourceRange = clonePointer(field.SourceRange)
+	clone.Transforms = cloneStrings(field.Transforms)
+	clone.LookupPaths = cloneSlice(field.LookupPaths)
+	for index := range clone.LookupPaths {
+		clone.LookupPaths[index] = cloneLookupPath(field.LookupPaths[index])
+	}
+	return clone
+}
+
+func cloneIndex(index Index) Index {
+	clone := index
+	clone.Fields = cloneSlice(index.Fields)
+	clone.Expressions = cloneStrings(index.Expressions)
+	clone.Condition = clonePointer(index.Condition)
+	clone.Include = cloneStrings(index.Include)
+	clone.Opclasses = cloneStrings(index.Opclasses)
+	clone.DBTablespace = clonePointer(index.DBTablespace)
+	clone.SourceRange = clonePointer(index.SourceRange)
+	return clone
+}
+
+func cloneConstraint(constraint Constraint) Constraint {
+	clone := constraint
+	clone.Fields = cloneStrings(constraint.Fields)
+	clone.Expressions = cloneStrings(constraint.Expressions)
+	clone.Condition = clonePointer(constraint.Condition)
+	clone.Include = cloneStrings(constraint.Include)
+	clone.Opclasses = cloneStrings(constraint.Opclasses)
+	clone.Deferrable = clonePointer(constraint.Deferrable)
+	clone.NullsDistinct = clonePointer(constraint.NullsDistinct)
+	clone.ViolationErrorCode = clonePointer(constraint.ViolationErrorCode)
+	clone.ViolationErrorMessage = clonePointer(constraint.ViolationErrorMessage)
+	clone.SourceRange = clonePointer(constraint.SourceRange)
+	return clone
+}
+
+func cloneSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	clone := make([]T, len(values))
+	copy(clone, values)
+	return clone
+}
+
+func clonePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func ModelName(canonicalLabel string) string {

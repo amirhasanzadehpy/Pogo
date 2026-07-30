@@ -1,0 +1,52 @@
+name: Stability
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/python
+            target: FuzzIPCReadFrame
+          - package: ./internal/harness
+            target: FuzzLSPReadFrame
+          - package: ./internal/analysis
+            target: FuzzUTF16PositionRoundTrip
+          - package: ./internal/analysis
+            target: FuzzUTF16EditMatchesFullParse
+          - package: ./internal/analysis
+            target: FuzzORMPathExtraction
+          - package: ./internal/analysis
+            target: FuzzStoreParserRecovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - run: go test -tags=grammar_subset,grammar_subset_python -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=5m ${{ matrix.package }}
+
+  benchmark-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: make fixture-env
+      - run: make bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-profile
+          path: benchmark-results/

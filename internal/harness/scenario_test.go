@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestScenarioValidation(t *testing.T) {
@@ -72,7 +73,7 @@ func TestHarnessHelperProcess(t *testing.T) {
 	if os.Getenv("POGO_HARNESS_HELPER") != "hang" {
 		return
 	}
-	select {}
+	time.Sleep(time.Hour)
 }
 
 func TestAssertMessageEnvelopeValidation(t *testing.T) {

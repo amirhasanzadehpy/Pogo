@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -28,12 +29,21 @@ func main() {
 func run(args []string, stderr io.Writer) int {
 	flags := flag.NewFlagSet(lsp.ServerName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: django-orm-lsp [options]")
+		fmt.Fprintln(stderr, "Django ORM LSP 3.16 server over stdio; stdout is reserved for protocol traffic.")
+		fmt.Fprintln(stderr, "Run only against trusted projects: Django startup executes project code.")
+		flags.PrintDefaults()
+	}
 	logPath := flags.String("log-file", "", "write server logs to this file instead of stderr")
 	projectRoot := flags.String("project", "", "Django project root")
 	pythonPath := flags.String("python", "", "Python interpreter for the Django worker")
 	settingsModule := flags.String("settings", "", "Django settings module")
 	showVersion := flags.Bool("version", false, "print the server version and exit")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if flags.NArg() != 0 {

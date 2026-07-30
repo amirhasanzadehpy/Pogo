@@ -4,6 +4,7 @@ package python
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -55,5 +56,23 @@ func TestUnixEndpointIsPrivateAndSealsSocket(t *testing.T) {
 	}
 	if _, err := os.Stat(created.Address()); !os.IsNotExist(err) {
 		t.Fatalf("sealed socket stat error = %v, want not exist", err)
+	}
+}
+
+func TestUnixEndpointAcceptCancellation(t *testing.T) {
+	runtimeDirectory, err := os.MkdirTemp("", "pogo-endpoint-cancel-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDirectory) })
+	created, err := newEndpoint(runtimeDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := created.Accept(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Accept() error = %v, want context deadline", err)
 	}
 }

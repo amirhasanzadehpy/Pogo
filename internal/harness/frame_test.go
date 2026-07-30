@@ -53,3 +53,29 @@ func TestReadFrameCleanEOF(t *testing.T) {
 		t.Fatalf("ReadFrame() error = %v, want io.EOF", err)
 	}
 }
+
+func FuzzLSPReadFrame(f *testing.F) {
+	for _, seed := range []string{
+		"Content-Length: 2\r\n\r\n{}",
+		"Content-Length: 4\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\nnull",
+		"Content-Length: -1\r\n\r\n",
+		"Content-Length: 2\n\n{}",
+	} {
+		f.Add(seed, uint16(1024))
+	}
+	f.Fuzz(func(t *testing.T, wire string, maximum uint16) {
+		if len(wire) > 64*1024 {
+			t.Skip()
+		}
+		limit := int(maximum)
+		body, err := ReadFrame(bufio.NewReaderSize(strings.NewReader(wire), 17), limit)
+		if err == nil {
+			if limit <= 0 {
+				limit = MaxFrameSize
+			}
+			if len(body) > limit {
+				t.Fatalf("successful frame length %d exceeds %d", len(body), limit)
+			}
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -181,4 +182,19 @@ func TestStrictJSONRejectsDuplicateKeysAndOversizedWrites(t *testing.T) {
 	if buffer.Len() != 0 {
 		t.Fatalf("oversized write emitted %d bytes", buffer.Len())
 	}
+}
+
+func FuzzIPCReadFrame(f *testing.F) {
+	for _, seed := range []string{"{}\n", "\n", "partial", "{}\n{}\n", "{\"value\":\"héllo 😀\"}\n", " \r\n"} {
+		f.Add(seed, uint8(8))
+	}
+	f.Fuzz(func(t *testing.T, wire string, bufferSize uint8) {
+		if len(wire) > 64*1024 {
+			t.Skip()
+		}
+		payload, err := ReadFrame(bufio.NewReaderSize(strings.NewReader(wire), int(bufferSize)+1))
+		if err == nil && (len(payload) == 0 || len(payload) > MaxFrameSize || bytes.Contains(payload, []byte{'\n'})) {
+			t.Fatalf("invalid successful frame length=%d payload=%q", len(payload), payload)
+		}
+	})
 }

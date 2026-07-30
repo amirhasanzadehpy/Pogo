@@ -3,9 +3,12 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestBuildIndexesAndRejectsDanglingRelations(t *testing.T) {
@@ -667,6 +670,140 @@ func BenchmarkGraphLookup(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func BenchmarkGraphBuild(b *testing.B) {
+	for _, size := range []int{10, 1_000, 10_000} {
+		snapshot := syntheticSnapshot(size)
+		b.Run(fmt.Sprintf("models-%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if _, err := Build(snapshot); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+	frame := syntheticSnapshot(1)
+	model := frame.Apps["app"].Models["Model0"]
+	for index := 0; index < 256; index++ {
+		name := fmt.Sprintf("dense_%03d", index)
+		model.Fields[name] = Field{Type: "django.db.models.CharField", InternalType: "CharField", Name: name, SourceModel: "app.Model0", SourceRange: testRange(index + 2), LookupPaths: []LookupPath{{Lookups: []string{"exact"}}}}
+	}
+	frame.Apps["app"].Models["Model0"] = model
+	b.Run("dense-relations-256", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := Build(frame); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkCacheSnapshots(b *testing.B) {
+	first, err := Build(syntheticSnapshot(1_000))
+	if err != nil {
+		b.Fatal(err)
+	}
+	second, err := Build(syntheticSnapshot(1_001))
+	if err != nil {
+		b.Fatal(err)
+	}
+	cache := &Cache{}
+	cache.Replace(first)
+	b.Run("read", func(b *testing.B) {
+		b.ReportAllocs()
+		totals := make([]time.Duration, b.N)
+		b.ResetTimer()
+		for index := 0; index < b.N; index++ {
+			started := time.Now()
+			graph, generation := cache.Load()
+			if graph == nil || generation == 0 {
+				b.Fatal("empty cache snapshot")
+			}
+			totals[index] = time.Since(started)
+		}
+		b.StopTimer()
+		reportSchemaPercentiles(b, totals)
+	})
+	b.Run("parallel-read", func(b *testing.B) {
+		b.ReportAllocs()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				graph, generation := cache.Load()
+				if graph == nil || generation == 0 {
+					b.Fatal("empty cache snapshot")
+				}
+			}
+		})
+	})
+	b.Run("swap", func(b *testing.B) {
+		b.ReportAllocs()
+		totals := make([]time.Duration, b.N)
+		b.ResetTimer()
+		for index := 0; index < b.N; index++ {
+			started := time.Now()
+			if index%2 == 0 {
+				cache.Replace(first)
+			} else {
+				cache.Replace(second)
+			}
+			totals[index] = time.Since(started)
+		}
+		b.StopTimer()
+		reportSchemaPercentiles(b, totals)
+	})
+	b.Run("concurrent-swap", func(b *testing.B) {
+		b.ReportAllocs()
+		stop := make(chan struct{})
+		var readers sync.WaitGroup
+		for range runtime.GOMAXPROCS(0) {
+			readers.Add(1)
+			go func() {
+				defer readers.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+						graph, generation := cache.Load()
+						if graph == nil || generation == 0 {
+							b.Error("empty concurrent snapshot")
+							return
+						}
+					}
+				}
+			}()
+		}
+		b.ResetTimer()
+		totals := make([]time.Duration, b.N)
+		for index := 0; index < b.N; index++ {
+			started := time.Now()
+			if index%2 == 0 {
+				cache.Replace(first)
+			} else {
+				cache.Replace(second)
+			}
+			totals[index] = time.Since(started)
+		}
+		b.StopTimer()
+		close(stop)
+		readers.Wait()
+		reportSchemaPercentiles(b, totals)
+	})
+}
+
+func reportSchemaPercentiles(b *testing.B, values []time.Duration) {
+	b.Helper()
+	sort.Slice(values, func(left, right int) bool { return values[left] < values[right] })
+	for _, percent := range []int{50, 95, 99} {
+		index := (len(values)*percent + 99) / 100
+		if index > 0 {
+			index--
+		}
+		b.ReportMetric(float64(values[index].Nanoseconds())/1000, fmt.Sprintf("p%d-us", percent))
 	}
 }
 

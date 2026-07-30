@@ -15,6 +15,9 @@ const (
 )
 
 func WriteFrame(writer io.Writer, body []byte) error {
+	if len(body) > MaxFrameSize {
+		return fmt.Errorf("frame length %d exceeds maximum %d", len(body), MaxFrameSize)
+	}
 	header := []byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body)))
 	if err := writeAll(writer, header); err != nil {
 		return fmt.Errorf("write header: %w", err)

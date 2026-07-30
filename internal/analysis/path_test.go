@@ -3,6 +3,7 @@ package analysis
 import (
 	"slices"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/amirhasanzadehpy/Pogo/internal/schema"
 )
@@ -43,6 +44,43 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzORMPathExtraction(f *testing.F) {
+	for _, seed := range []string{
+		"Book.objects.filter(author__name=value)",
+		"Book.objects.values(\"author__name\")",
+		"Book.objects.filter(parent__parent__name=value)",
+		"Book.objects.filter(value=func(\"comma,inside\"), author__name=value)",
+		"Book.objects.values(\"\"\"author__name\"\"\")",
+	} {
+		f.Add("from myapp.models import Book\n"+seed, uint16(len(seed)))
+	}
+	f.Fuzz(func(t *testing.T, text string, rawOffset uint16) {
+		source := []byte(text)
+		if len(source) == 0 || len(source) > 64*1024 || !utf8.Valid(source) {
+			t.Skip()
+		}
+		offset := int(rawOffset) % (len(source) + 1)
+		context, ok := Analyze(source, offset, pathTestGraph(t))
+		if !ok || context.Path == nil {
+			return
+		}
+		path := context.Path
+		for _, range_ := range []ByteRange{context.Replacement, path.Replacement, path.Arguments} {
+			if range_.Start < 0 || range_.Start > range_.End || range_.End > len(source) {
+				t.Fatalf("out-of-bounds range %#v for %d-byte source", range_, len(source))
+			}
+		}
+		if path.ActiveSegment < 0 || path.ActiveSegment >= len(path.Segments) {
+			t.Fatalf("active segment %d outside %d segments", path.ActiveSegment, len(path.Segments))
+		}
+		for _, segment := range path.Segments {
+			if segment.Range.Start < 0 || segment.Range.Start > segment.Range.End || segment.Range.End > len(source) || string(source[segment.Range.Start:segment.Range.End]) != segment.Text {
+				t.Fatalf("invalid segment %#v", segment)
+			}
+		}
+	})
 }
 
 func TestPathResolverContextPolicies(t *testing.T) {

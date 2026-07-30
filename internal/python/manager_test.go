@@ -717,6 +717,7 @@ func BenchmarkManagerRefresh(b *testing.B) {
 	sort.Slice(totals, func(left, right int) bool { return totals[left] < totals[right] })
 	b.ReportMetric(float64(percentileDuration(totals, 50).Nanoseconds())/1e6, "p50-ms")
 	b.ReportMetric(float64(percentileDuration(totals, 95).Nanoseconds())/1e6, "p95-ms")
+	b.ReportMetric(float64(percentileDuration(totals, 99).Nanoseconds())/1e6, "p99-ms")
 	stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := manager.Stop(stopContext); err != nil {

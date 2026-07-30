@@ -328,6 +328,7 @@ func benchmarkNavigationLatency(b *testing.B, run func()) {
 	sort.Slice(totals, func(left, right int) bool { return totals[left] < totals[right] })
 	b.ReportMetric(float64(percentile(totals, 50).Nanoseconds())/1000, "p50-us")
 	b.ReportMetric(float64(percentile(totals, 95).Nanoseconds())/1000, "p95-us")
+	b.ReportMetric(float64(percentile(totals, 99).Nanoseconds())/1000, "p99-us")
 }
 
 type navigationTestingT interface {

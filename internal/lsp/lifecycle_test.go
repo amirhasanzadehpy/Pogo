@@ -91,6 +91,31 @@ func TestWorkerStartsAfterInitializedAndStopsOnShutdown(t *testing.T) {
 	}
 }
 
+func TestRepeatedInitializeSaveShutdownReleasesWorkerOnce(t *testing.T) {
+	for cycle := 0; cycle < 50; cycle++ {
+		worker := &fakeWorker{}
+		lifecycle := NewLifecycleContext(context.Background(), func() {}, nil, worker)
+		if _, _, _, err := lifecycle.Handle(initializeContext(t)); err != nil {
+			t.Fatalf("cycle %d initialize: %v", cycle, err)
+		}
+		if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodInitialized, Params: json.RawMessage(`{}`)}); err != nil {
+			t.Fatalf("cycle %d initialized: %v", cycle, err)
+		}
+		worker.DidSave("/workspace/app/models.py")
+		if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodShutdown}); err != nil {
+			t.Fatalf("cycle %d shutdown: %v", cycle, err)
+		}
+		if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodExit}); err != nil {
+			t.Fatalf("cycle %d exit: %v", cycle, err)
+		}
+		lifecycle.StopWorker()
+		starts, stops := worker.counts()
+		if starts != 1 || stops != 1 || len(worker.savedPaths()) != 1 {
+			t.Fatalf("cycle %d worker lifecycle = starts %d stops %d saves %d", cycle, starts, stops, len(worker.savedPaths()))
+		}
+	}
+}
+
 func TestWorkerFailureNotifiesAndExitStopsWorker(t *testing.T) {
 	worker := &fakeWorker{fail: true}
 	lifecycle := NewLifecycleContext(context.Background(), func() {}, nil, worker)
