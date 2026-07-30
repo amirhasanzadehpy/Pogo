@@ -79,10 +79,18 @@ reaped on shutdown, exit, or stdio EOF. Worker and project output is forwarded
 to the language-server log and never to LSP stdout.
 
 Open Python documents are parsed incrementally in Go with only the Python
-grammar embedded in release builds. Direct Django model fields and managers are
-available through completion and hover once the schema cache is loaded. These
-hot handlers continue to use the last valid cache when the worker is unavailable
-and never issue worker requests.
+grammar embedded in release builds. Completion and hover resolve direct fields,
+deep relations, type-specific lookups and transforms, projection strings,
+related-loading paths, attached custom managers, and custom QuerySet chains.
+Signature help and method hover use cached signatures and docstrings without
+executing project methods. These hot handlers continue to use the last valid
+cache when the worker is unavailable and never issue worker requests.
+
+Deep paths use Django's context-specific names: query names in filters and
+projections, reverse accessors in `prefetch_related`, and only single-valued
+relations in `select_related`. The iterative resolver is bounded by source
+length and segment count rather than unique models, so recursive self-relations
+remain valid.
 
 To run Django commands directly, invoke the virtual environment interpreter
 without activating it:

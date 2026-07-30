@@ -229,6 +229,39 @@ func TestValidateWireRejectsMissingRequiredMembers(t *testing.T) {
 	}
 }
 
+func TestValidateManagerWireRequiresQuerySetBindings(t *testing.T) {
+	method := Method{Name: "active", OwnerClass: "app.BaseQuerySet", SourceRange: testRange(2), Chainable: true}
+	manager := Manager{
+		Name: "objects", OwnerClass: "app.Manager", SourceRange: testRange(1), Methods: []Method{},
+		QuerySetMethods: []BoundQuerySetMethod{{Method: method, AvailableOnManager: true}},
+	}
+	payload, err := json.Marshal(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateManagerWire(payload); err != nil {
+		t.Fatalf("valid manager wire rejected: %v", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(payload, &object); err != nil {
+		t.Fatal(err)
+	}
+	delete(object, "queryset_methods")
+	missing, _ := json.Marshal(object)
+	if err := validateManagerWire(missing); err == nil {
+		t.Fatal("missing queryset_methods error = nil")
+	}
+	if err := json.Unmarshal(payload, &object); err != nil {
+		t.Fatal(err)
+	}
+	binding := object["queryset_methods"].([]any)[0].(map[string]any)
+	delete(binding, "available_on_manager")
+	missingFlag, _ := json.Marshal(object)
+	if err := validateManagerWire(missingFlag); err == nil {
+		t.Fatal("missing available_on_manager error = nil")
+	}
+}
+
 func TestBuildRejectsQueryAliasCollisionsDeterministically(t *testing.T) {
 	for range 100 {
 		snapshot := syntheticSnapshot(2)
@@ -241,6 +274,364 @@ func TestBuildRejectsQueryAliasCollisionsDeterministically(t *testing.T) {
 		if _, err := Build(snapshot); err == nil {
 			t.Fatal("query alias collision error = nil")
 		}
+	}
+}
+
+func TestRelationContextsUseDjangoNamesAndCardinality(t *testing.T) {
+	snapshot := syntheticSnapshot(2)
+	model := snapshot.Apps["app"].Models["Model0"]
+
+	manyToOne := string(RelationManyToOne)
+	forward := model.Fields["relation"]
+	forward.RelationCardinality = &manyToOne
+	model.Fields["relation"] = forward
+
+	oneToMany := string(RelationOneToMany)
+	reverseQueryName := "reverse_query"
+	reverseAccessorName := "reverse_set"
+	reverse := model.Fields["reverse"]
+	reverse.QueryName = &reverseQueryName
+	reverse.AccessorName = &reverseAccessorName
+	reverse.RelationCardinality = &oneToMany
+	model.Fields["reverse"] = reverse
+
+	reverseDirection := string(RelationReverse)
+	oneToOne := string(RelationOneToOne)
+	reverseOneQueryName := "reverse_one_query"
+	reverseOneAccessorName := "reverse_one_accessor"
+	related := "app.Model1"
+	model.Fields["reverse_one"] = Field{
+		Type:                "django.db.models.OneToOneRel",
+		InternalType:        "OneToOneRel",
+		Name:                "reverse_one",
+		IsRelation:          true,
+		RelatedModel:        &related,
+		QueryName:           &reverseOneQueryName,
+		AccessorName:        &reverseOneAccessorName,
+		SourceModel:         related,
+		SourceRange:         testRange(1),
+		RelationDirection:   &reverseDirection,
+		RelationCardinality: &oneToOne,
+	}
+
+	forwardDirection := string(RelationForward)
+	manyToMany := string(RelationManyToMany)
+	model.Fields["stores"] = Field{
+		Type:                "django.db.models.ManyToManyField",
+		InternalType:        "ManyToManyField",
+		Name:                "stores",
+		IsRelation:          true,
+		RelatedModel:        &related,
+		SourceModel:         "app.Model0",
+		SourceRange:         testRange(1),
+		RelationDirection:   &forwardDirection,
+		RelationCardinality: &manyToMany,
+	}
+	snapshot.Apps["app"].Models["Model0"] = model
+
+	graph, err := Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		visit   func(func(FieldAccess) bool) bool
+		want    string
+		present []string
+		absent  []string
+		lookup  func(string) (FieldAccess, bool)
+	}{
+		{
+			name:    "query",
+			visit:   func(visitor func(FieldAccess) bool) bool { return graph.VisitQueryRelations("app.Model0", visitor) },
+			want:    "[relation stores relation_id reverse_one_query reverse_query]",
+			present: []string{"relation", "relation_id", "reverse_query", "reverse_one_query", "stores"},
+			absent:  []string{"reverse_set", "reverse_one_accessor"},
+			lookup:  func(name string) (FieldAccess, bool) { return graph.QueryRelation("app.Model0", name) },
+		},
+		{
+			name: "select_related",
+			visit: func(visitor func(FieldAccess) bool) bool {
+				return graph.VisitSelectRelatedRelations("app.Model0", visitor)
+			},
+			want:    "[relation reverse_one_query]",
+			present: []string{"relation", "reverse_one_query"},
+			absent:  []string{"relation_id", "reverse_query", "reverse_one_accessor", "stores"},
+			lookup:  func(name string) (FieldAccess, bool) { return graph.SelectRelatedRelation("app.Model0", name) },
+		},
+		{
+			name: "prefetch_related",
+			visit: func(visitor func(FieldAccess) bool) bool {
+				return graph.VisitPrefetchRelatedRelations("app.Model0", visitor)
+			},
+			want:    "[relation stores reverse_one_accessor reverse_set]",
+			present: []string{"relation", "stores", "reverse_set", "reverse_one_accessor"},
+			absent:  []string{"relation_id", "reverse_query", "reverse_one_query"},
+			lookup:  func(name string) (FieldAccess, bool) { return graph.PrefetchRelatedRelation("app.Model0", name) },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var names []string
+			if !test.visit(func(access FieldAccess) bool {
+				names = append(names, access.Name)
+				return true
+			}) {
+				t.Fatal("visitor rejected a known model")
+			}
+			if got := fmt.Sprint(names); got != test.want {
+				t.Fatalf("visitor names = %s, want %s", got, test.want)
+			}
+			for _, name := range test.present {
+				access, ok := test.lookup(name)
+				if !ok || access.Field == nil || !access.Field.IsRelation() {
+					t.Fatalf("lookup %q = %#v, %v", name, access, ok)
+				}
+			}
+			for _, name := range test.absent {
+				if _, ok := test.lookup(name); ok {
+					t.Fatalf("lookup %q unexpectedly succeeded", name)
+				}
+			}
+		})
+	}
+
+	access, ok := graph.QueryRelation("app.Model0", "reverse_query")
+	if !ok {
+		t.Fatal("reverse query relation is missing")
+	}
+	if direction, ok := access.Field.RelationDirection(); !ok || direction != RelationReverse {
+		t.Fatalf("direction = %q, %v", direction, ok)
+	}
+	if cardinality, ok := access.Field.RelationCardinality(); !ok || cardinality != RelationOneToMany {
+		t.Fatalf("cardinality = %q, %v", cardinality, ok)
+	}
+	if accessor, ok := access.Field.AccessorName(); !ok || accessor != "reverse_set" {
+		t.Fatalf("accessor = %q, %v", accessor, ok)
+	}
+	forwardAccess, _ := graph.QueryRelation("app.Model0", "relation")
+	if attname, ok := forwardAccess.Field.Attname(); !ok || attname != "relation_id" {
+		t.Fatalf("attname = %q, %v", attname, ok)
+	}
+}
+
+func TestLookupMetadataReturnsDeepCopies(t *testing.T) {
+	snapshot := syntheticSnapshot(1)
+	model := snapshot.Apps["app"].Models["Model0"]
+	field := model.Fields["relation"]
+	field.Lookups = []string{"exact", "isnull"}
+	field.UnsupportedLookups = []string{"contains"}
+	field.Transforms = []string{"date"}
+	field.LookupPaths = []LookupPath{
+		{Lookups: []string{"exact", "isnull"}},
+		{Transforms: []string{"date"}, Kinds: []string{"transform"}, Lookups: []string{"gte"}},
+	}
+	field.LookupPathsTruncated = true
+	model.Fields["relation"] = field
+	snapshot.Apps["app"].Models["Model0"] = model
+
+	graph, err := Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, ok := graph.Field("app.Model0", "relation")
+	if !ok {
+		t.Fatal("field is missing")
+	}
+
+	field.Lookups[0] = "mutated-input"
+	field.LookupPaths[1].Transforms[0] = "mutated-input"
+	paths := ref.LookupPaths()
+	paths[0].Lookups[0] = "mutated-result"
+	paths[1].Transforms[0] = "mutated-result"
+	lookups := ref.Lookups()
+	lookups[0] = "mutated-result"
+	transforms := ref.Transforms()
+	transforms[0] = "mutated-result"
+	unsupported := ref.UnsupportedLookups()
+	unsupported[0] = "mutated-result"
+	ref.VisitLookupPaths(func(path LookupPath) bool {
+		if len(path.Lookups) > 0 {
+			path.Lookups[0] = "mutated-visitor"
+		}
+		return true
+	})
+
+	paths = ref.LookupPaths()
+	if got, want := fmt.Sprint(ref.Lookups()), "[exact isnull]"; got != want {
+		t.Fatalf("lookups = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(ref.UnsupportedLookups()), "[contains]"; got != want {
+		t.Fatalf("unsupported lookups = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(ref.Transforms()), "[date]"; got != want {
+		t.Fatalf("transforms = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(paths[0].Lookups), "[exact isnull]"; got != want {
+		t.Fatalf("root path lookups = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(paths[1].Transforms), "[date]"; got != want {
+		t.Fatalf("path transforms = %s, want %s", got, want)
+	}
+	if !ref.LookupPathsTruncated() {
+		t.Fatal("lookup path truncation flag was lost")
+	}
+}
+
+func TestManagerMethodsAttachToExactQuerySetClass(t *testing.T) {
+	snapshot := syntheticSnapshot(1)
+	model := snapshot.Apps["app"].Models["Model0"]
+	liveClass := "app.query.LiveQuerySet"
+	baseClass := "app.query.BaseQuerySet"
+	archiveClass := "app.query.ArchiveQuerySet"
+	liveSignature := "(*, enabled=True)"
+	liveDocstring := "Return live rows."
+	managerSignature := "(limit=10)"
+	managerDocstring := "Return featured rows."
+	model.QuerySetMethods = []Method{
+		{
+			Name:             "active",
+			OwnerClass:       baseClass,
+			Signature:        &liveSignature,
+			Docstring:        &liveDocstring,
+			SourceRange:      testRange(10),
+			Chainable:        true,
+			AssumedChainable: true,
+		},
+		{Name: "hidden", OwnerClass: baseClass, SourceRange: testRange(15), Chainable: true},
+		{Name: "archived", OwnerClass: archiveClass, SourceRange: testRange(20), Chainable: true},
+	}
+	model.Managers = []Manager{
+		{
+			Name:          "archive",
+			OwnerClass:    "app.manager.ArchiveManager",
+			QuerySetClass: &archiveClass,
+			SourceRange:   testRange(4),
+		},
+		{
+			Name:          "objects",
+			OwnerClass:    "app.manager.LiveManager",
+			QuerySetClass: &liveClass,
+			Default:       true,
+			Local:         true,
+			SourceRange:   testRange(3),
+			QuerySetMethods: []BoundQuerySetMethod{
+				{Method: model.QuerySetMethods[0], AvailableOnManager: true},
+				{Method: model.QuerySetMethods[1]},
+			},
+			Methods: []Method{{
+				Name:        "featured",
+				OwnerClass:  "app.manager.LiveManager",
+				Signature:   &managerSignature,
+				Docstring:   &managerDocstring,
+				SourceRange: testRange(30),
+				Chainable:   true,
+			}},
+		},
+		{
+			Name:          "replica",
+			OwnerClass:    "app.manager.LiveManager",
+			QuerySetClass: &liveClass,
+			SourceRange:   testRange(5),
+			QuerySetMethods: []BoundQuerySetMethod{
+				{Method: model.QuerySetMethods[0], AvailableOnManager: true},
+			},
+		},
+	}
+	model.DefaultManager = "objects"
+	model.CustomManagers = []string{"archive", "objects", "replica"}
+	snapshot.Apps["app"].Models["Model0"] = model
+
+	graph, err := Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, _ := graph.Manager("app.Model0", "objects")
+	replica, _ := graph.Manager("app.Model0", "replica")
+	archive, _ := graph.Manager("app.Model0", "archive")
+	if class, ok := objects.QuerySetClass(); !ok || class != liveClass {
+		t.Fatalf("objects QuerySet class = %q, %v", class, ok)
+	}
+	live, ok := objects.QuerySet()
+	if !ok {
+		t.Fatal("objects QuerySet is missing")
+	}
+	replicaQuerySet, ok := replica.QuerySet()
+	if !ok || replicaQuerySet != live {
+		t.Fatal("managers with the same exact QuerySet class do not share identity")
+	}
+	indexedLive, ok := graph.QuerySet("app.Model0", liveClass)
+	if !ok || indexedLive != live {
+		t.Fatal("model QuerySet index does not preserve manager identity")
+	}
+	active, ok := live.Method("active")
+	if !ok || !active.Chainable() || !active.AssumedChainable() {
+		t.Fatal("live QuerySet active method metadata is incomplete")
+	}
+	if signature, ok := active.Signature(); !ok || signature != liveSignature {
+		t.Fatalf("active signature = %q, %v", signature, ok)
+	}
+	if docstring, ok := active.Docstring(); !ok || docstring != liveDocstring {
+		t.Fatalf("active docstring = %q, %v", docstring, ok)
+	}
+	if _, ok := live.Method("archived"); ok {
+		t.Fatal("archive-specific method attached to live QuerySet")
+	}
+	if _, ok := live.Method("hidden"); !ok {
+		t.Fatal("inherited queryset-only method is not attached to concrete QuerySet")
+	}
+	if _, ok := objects.QuerySetMethod("active"); !ok {
+		t.Fatal("manager-visible inherited QuerySet method is missing")
+	}
+	if _, ok := objects.QuerySetMethod("hidden"); ok {
+		t.Fatal("queryset-only method leaked onto manager")
+	}
+	archiveQuerySet, ok := archive.QuerySet()
+	if !ok {
+		t.Fatal("archive QuerySet is missing")
+	}
+	if _, ok := archiveQuerySet.Method("archived"); !ok {
+		t.Fatal("archive method is not attached")
+	}
+	if _, ok := archiveQuerySet.Method("active"); ok {
+		t.Fatal("live-specific method attached to archive QuerySet")
+	}
+	featured, ok := objects.Method("featured")
+	if !ok || !featured.Chainable() {
+		t.Fatal("manager method is not attached")
+	}
+	if signature, ok := featured.Signature(); !ok || signature != managerSignature {
+		t.Fatalf("featured signature = %q, %v", signature, ok)
+	}
+	if _, ok := archive.Method("featured"); ok {
+		t.Fatal("manager-specific method leaked to another manager")
+	}
+
+	var managers []string
+	graph.VisitManagers("app.Model0", func(manager *ManagerRef) bool {
+		managers = append(managers, manager.Name())
+		return true
+	})
+	if got, want := fmt.Sprint(managers), "[archive objects replica]"; got != want {
+		t.Fatalf("manager order = %s, want %s", got, want)
+	}
+	var methods []string
+	graph.VisitQuerySetMethods("app.Model0", func(method *MethodRef) bool {
+		methods = append(methods, method.Name()+":"+method.OwnerClass())
+		return true
+	})
+	if got, want := fmt.Sprint(methods), "[active:app.query.BaseQuerySet archived:app.query.ArchiveQuerySet hidden:app.query.BaseQuerySet]"; got != want {
+		t.Fatalf("QuerySet method order = %s, want %s", got, want)
+	}
+
+	liveSignature = "mutated"
+	liveDocstring = "mutated"
+	if signature, _ := active.Signature(); signature != "(*, enabled=True)" {
+		t.Fatalf("frozen signature = %q", signature)
+	}
+	if docstring, _ := active.Docstring(); docstring != "Return live rows." {
+		t.Fatalf("frozen docstring = %q", docstring)
 	}
 }
 

@@ -29,10 +29,14 @@ type modelIndex struct {
 	attnames       map[string]*FieldRef
 	queries        map[string]*FieldRef
 	accessors      map[string]*FieldRef
+	relations      [relationContextCount]relationIndex
 	managers       map[string]*ManagerRef
+	querySets      map[string]*QuerySetRef
 	queryAccess    []FieldAccess
 	instanceAccess []FieldAccess
 	managerOrder   []*ManagerRef
+	querySetOrder  []*QuerySetRef
+	methodOrder    []*MethodRef
 	queryByName    map[string]FieldAccess
 	instanceByName map[string]FieldAccess
 }
@@ -43,7 +47,52 @@ type FieldRef struct {
 }
 
 type ManagerRef struct {
-	manager Manager
+	manager             Manager
+	methods             map[string]*MethodRef
+	methodOrder         []*MethodRef
+	querySet            *QuerySetRef
+	querySetMethods     map[string]*MethodRef
+	querySetMethodOrder []*MethodRef
+}
+
+type QuerySetRef struct {
+	class       string
+	methods     map[string]*MethodRef
+	methodOrder []*MethodRef
+}
+
+type MethodRef struct {
+	method Method
+}
+
+type RelationDirection string
+
+const (
+	RelationForward RelationDirection = "forward"
+	RelationReverse RelationDirection = "reverse"
+)
+
+type RelationCardinality string
+
+const (
+	RelationManyToOne  RelationCardinality = "many-to-one"
+	RelationOneToMany  RelationCardinality = "one-to-many"
+	RelationOneToOne   RelationCardinality = "one-to-one"
+	RelationManyToMany RelationCardinality = "many-to-many"
+)
+
+type RelationContext uint8
+
+const (
+	RelationQuery RelationContext = iota
+	RelationSelectRelated
+	RelationPrefetchRelated
+	relationContextCount
+)
+
+type relationIndex struct {
+	byName  map[string]FieldAccess
+	ordered []FieldAccess
 }
 
 type FieldAccessKind uint8
@@ -168,13 +217,31 @@ func validateModel(appKey, modelName string, model Model, snapshot Snapshot) err
 		if err := validateRange(manager.SourceRange); err != nil {
 			return fmt.Errorf("model %s manager %s source range: %w", model.CanonicalLabel, manager.Name, err)
 		}
+		if manager.QuerySetClass != nil && *manager.QuerySetClass == "" {
+			return fmt.Errorf("model %s manager %s has empty QuerySet class", model.CanonicalLabel, manager.Name)
+		}
+		methodNames := make(map[string]struct{}, len(manager.Methods))
 		for _, method := range manager.Methods {
-			if method.Name == "" || method.OwnerClass == "" || method.SourceRange == nil {
-				return fmt.Errorf("model %s manager %s has invalid method", model.CanonicalLabel, manager.Name)
+			if err := validateMethod(method); err != nil {
+				return fmt.Errorf("model %s manager %s method %s: %w", model.CanonicalLabel, manager.Name, method.Name, err)
 			}
-			if err := validateRange(method.SourceRange); err != nil {
-				return fmt.Errorf("model %s manager %s method %s source range: %w", model.CanonicalLabel, manager.Name, method.Name, err)
+			if _, exists := methodNames[method.Name]; exists {
+				return fmt.Errorf("model %s manager %s has duplicate method %q", model.CanonicalLabel, manager.Name, method.Name)
 			}
+			methodNames[method.Name] = struct{}{}
+		}
+		if len(manager.QuerySetMethods) > 0 && manager.QuerySetClass == nil {
+			return fmt.Errorf("model %s manager %s has QuerySet methods without a QuerySet class", model.CanonicalLabel, manager.Name)
+		}
+		querySetMethodNames := make(map[string]struct{}, len(manager.QuerySetMethods))
+		for _, binding := range manager.QuerySetMethods {
+			if err := validateMethod(binding.Method); err != nil {
+				return fmt.Errorf("model %s manager %s QuerySet method %s: %w", model.CanonicalLabel, manager.Name, binding.Method.Name, err)
+			}
+			if _, exists := querySetMethodNames[binding.Method.Name]; exists {
+				return fmt.Errorf("model %s manager %s has duplicate QuerySet method %q", model.CanonicalLabel, manager.Name, binding.Method.Name)
+			}
+			querySetMethodNames[binding.Method.Name] = struct{}{}
 		}
 	}
 	if _, exists := managerNames[model.DefaultManager]; !exists {
@@ -231,13 +298,16 @@ func validateModel(appKey, modelName string, model Model, snapshot Snapshot) err
 	if model.BaseManager.Name == "" || model.BaseManager.OwnerClass == "" {
 		return fmt.Errorf("model %s has invalid base manager", model.CanonicalLabel)
 	}
+	querySetMethods := make(map[string]struct{}, len(model.QuerySetMethods))
 	for _, method := range model.QuerySetMethods {
-		if method.Name == "" || method.OwnerClass == "" || method.SourceRange == nil {
-			return fmt.Errorf("model %s has invalid QuerySet method", model.CanonicalLabel)
+		if err := validateMethod(method); err != nil {
+			return fmt.Errorf("model %s QuerySet method %s: %w", model.CanonicalLabel, method.Name, err)
 		}
-		if err := validateRange(method.SourceRange); err != nil {
-			return fmt.Errorf("model %s QuerySet method %s source range: %w", model.CanonicalLabel, method.Name, err)
+		key := method.OwnerClass + "\x00" + method.Name
+		if _, exists := querySetMethods[key]; exists {
+			return fmt.Errorf("model %s has duplicate QuerySet method %s.%s", model.CanonicalLabel, method.OwnerClass, method.Name)
 		}
+		querySetMethods[key] = struct{}{}
 	}
 	for _, index := range model.Indexes {
 		if index.Name == "" || index.SourceRange == nil {
@@ -254,6 +324,19 @@ func validateModel(appKey, modelName string, model Model, snapshot Snapshot) err
 		if err := validateRange(constraint.SourceRange); err != nil {
 			return fmt.Errorf("model %s constraint %s source range: %w", model.CanonicalLabel, constraint.Name, err)
 		}
+	}
+	return nil
+}
+
+func validateMethod(method Method) error {
+	if method.Name == "" || method.OwnerClass == "" || method.SourceRange == nil {
+		return errors.New("invalid metadata")
+	}
+	if method.AssumedChainable && !method.Chainable {
+		return errors.New("assumed chainable method is not chainable")
+	}
+	if err := validateRange(method.SourceRange); err != nil {
+		return fmt.Errorf("source range: %w", err)
 	}
 	return nil
 }
@@ -280,10 +363,16 @@ func buildModelIndex(name string, model Model) (*modelIndex, error) {
 		queries:        make(map[string]*FieldRef),
 		accessors:      make(map[string]*FieldRef),
 		managers:       make(map[string]*ManagerRef, len(model.Managers)),
+		querySets:      make(map[string]*QuerySetRef),
 		queryByName:    make(map[string]FieldAccess),
 		instanceByName: make(map[string]FieldAccess),
 	}
-	for fieldName, field := range model.Fields {
+	for context := RelationQuery; context < relationContextCount; context++ {
+		index.relations[context].byName = make(map[string]FieldAccess)
+	}
+	fieldNames := sortedFieldNames(model.Fields)
+	for _, fieldName := range fieldNames {
+		field := model.Fields[fieldName]
 		fieldReference := &FieldRef{field: field}
 		index.fields[fieldName] = fieldReference
 		if existing, exists := index.queries[fieldName]; exists && existing != fieldReference {
@@ -311,12 +400,46 @@ func buildModelIndex(name string, model Model) (*modelIndex, error) {
 			}
 		}
 	}
+	for _, method := range model.QuerySetMethods {
+		querySet := index.ensureQuerySet(method.OwnerClass)
+		methodReference := &MethodRef{method: method}
+		querySet.methods[method.Name] = methodReference
+		querySet.methodOrder = append(querySet.methodOrder, methodReference)
+		index.methodOrder = append(index.methodOrder, methodReference)
+	}
 	for _, manager := range model.Managers {
-		reference := &ManagerRef{manager: manager}
+		reference := &ManagerRef{
+			manager:         manager,
+			methods:         make(map[string]*MethodRef, len(manager.Methods)),
+			querySetMethods: make(map[string]*MethodRef, len(manager.QuerySetMethods)),
+		}
+		if manager.QuerySetClass != nil {
+			reference.querySet = index.ensureQuerySet(*manager.QuerySetClass)
+		}
+		for _, method := range manager.Methods {
+			methodReference := &MethodRef{method: method}
+			reference.methods[method.Name] = methodReference
+			reference.methodOrder = append(reference.methodOrder, methodReference)
+		}
+		for _, binding := range manager.QuerySetMethods {
+			methodReference := reference.querySet.methods[binding.Method.Name]
+			if methodReference == nil {
+				methodReference = &MethodRef{method: binding.Method}
+				reference.querySet.methods[binding.Method.Name] = methodReference
+				reference.querySet.methodOrder = append(reference.querySet.methodOrder, methodReference)
+			}
+			if binding.AvailableOnManager {
+				reference.querySetMethods[binding.Method.Name] = methodReference
+				reference.querySetMethodOrder = append(reference.querySetMethodOrder, methodReference)
+			}
+		}
+		sortMethods(reference.methodOrder)
+		sortMethods(reference.querySetMethodOrder)
 		index.managers[manager.Name] = reference
 		index.managerOrder = append(index.managerOrder, reference)
 	}
-	for _, field := range index.fields {
+	for _, fieldName := range fieldNames {
+		field := index.fields[fieldName]
 		if field.field.RelationDirection != nil && *field.field.RelationDirection == "reverse" {
 			queryName := field.field.Name
 			if field.field.QueryName != nil && *field.field.QueryName != "" {
@@ -328,19 +451,124 @@ func buildModelIndex(name string, model Model) (*modelIndex, error) {
 			}
 			index.addAccess(queryName, FieldAccessReverse, field, true)
 			index.addAccess(instanceName, FieldAccessReverse, field, false)
+			if field.field.IsRelation {
+				if err := index.addRelation(RelationQuery, queryName, FieldAccessReverse, field); err != nil {
+					return nil, err
+				}
+				if field.field.RelationCardinality != nil && *field.field.RelationCardinality == string(RelationOneToOne) && field.field.RelatedModel != nil {
+					if err := index.addRelation(RelationSelectRelated, queryName, FieldAccessReverse, field); err != nil {
+						return nil, err
+					}
+				}
+				if err := index.addRelation(RelationPrefetchRelated, instanceName, FieldAccessReverse, field); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 		index.addAccess(field.field.Name, FieldAccessDeclared, field, true)
 		index.addAccess(field.field.Name, FieldAccessDeclared, field, false)
+		if field.field.IsRelation {
+			if err := index.addRelation(RelationQuery, field.field.Name, FieldAccessDeclared, field); err != nil {
+				return nil, err
+			}
+			if field.field.RelationCardinality != nil && field.field.RelatedModel != nil && (*field.field.RelationCardinality == string(RelationManyToOne) || *field.field.RelationCardinality == string(RelationOneToOne)) {
+				if err := index.addRelation(RelationSelectRelated, field.field.Name, FieldAccessDeclared, field); err != nil {
+					return nil, err
+				}
+			}
+			if err := index.addRelation(RelationPrefetchRelated, field.field.Name, FieldAccessDeclared, field); err != nil {
+				return nil, err
+			}
+		}
 		if field.field.Attname != nil && *field.field.Attname != "" && *field.field.Attname != field.field.Name {
 			index.addAccess(*field.field.Attname, FieldAccessAttname, field, true)
 			index.addAccess(*field.field.Attname, FieldAccessAttname, field, false)
+			if field.field.IsRelation {
+				if err := index.addRelation(RelationQuery, *field.field.Attname, FieldAccessAttname, field); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	sort.Slice(index.queryAccess, func(left, right int) bool { return accessLess(index.queryAccess[left], index.queryAccess[right]) })
 	sort.Slice(index.instanceAccess, func(left, right int) bool { return accessLess(index.instanceAccess[left], index.instanceAccess[right]) })
+	for context := RelationQuery; context < relationContextCount; context++ {
+		index.relations[context].ordered = make([]FieldAccess, 0, len(index.relations[context].byName))
+		for _, access := range index.relations[context].byName {
+			index.relations[context].ordered = append(index.relations[context].ordered, access)
+		}
+		sort.Slice(index.relations[context].ordered, func(left, right int) bool {
+			return accessLess(index.relations[context].ordered[left], index.relations[context].ordered[right])
+		})
+	}
 	sort.Slice(index.managerOrder, func(left, right int) bool { return index.managerOrder[left].Name() < index.managerOrder[right].Name() })
+	for _, querySet := range index.querySets {
+		sortMethods(querySet.methodOrder)
+		index.querySetOrder = append(index.querySetOrder, querySet)
+	}
+	sort.Slice(index.querySetOrder, func(left, right int) bool {
+		return index.querySetOrder[left].Class() < index.querySetOrder[right].Class()
+	})
+	sortMethods(index.methodOrder)
 	return index, nil
+}
+
+func sortedFieldNames(fields map[string]Field) []string {
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (index *modelIndex) ensureQuerySet(class string) *QuerySetRef {
+	if existing := index.querySets[class]; existing != nil {
+		return existing
+	}
+	querySet := &QuerySetRef{class: class, methods: make(map[string]*MethodRef)}
+	index.querySets[class] = querySet
+	return querySet
+}
+
+func sortMethods(methods []*MethodRef) {
+	sort.Slice(methods, func(left, right int) bool {
+		if methods[left].Name() != methods[right].Name() {
+			return methods[left].Name() < methods[right].Name()
+		}
+		return methods[left].OwnerClass() < methods[right].OwnerClass()
+	})
+}
+
+func (index *modelIndex) addRelation(context RelationContext, name string, kind FieldAccessKind, field *FieldRef) error {
+	if name == "" || name == "+" {
+		return nil
+	}
+	relations := &index.relations[context]
+	if existing, exists := relations.byName[name]; exists {
+		if existing.Field != field {
+			return fmt.Errorf("model %s has duplicate %s relation name %q", index.model.CanonicalLabel, context, name)
+		}
+		if existing.Kind <= kind {
+			return nil
+		}
+	}
+	relations.byName[name] = FieldAccess{Name: name, Kind: kind, Field: field}
+	return nil
+}
+
+func (context RelationContext) String() string {
+	switch context {
+	case RelationQuery:
+		return "query"
+	case RelationSelectRelated:
+		return "select_related"
+	case RelationPrefetchRelated:
+		return "prefetch_related"
+	default:
+		return "unknown"
+	}
 }
 
 func (index *modelIndex) addAccess(name string, kind FieldAccessKind, field *FieldRef, query bool) {
@@ -488,6 +716,30 @@ func (graph *Graph) AttnameField(canonicalLabel, name string) (*FieldRef, bool) 
 	return field, exists
 }
 
+func (graph *Graph) Relation(canonicalLabel, name string, context RelationContext) (FieldAccess, bool) {
+	if graph == nil || context >= relationContextCount {
+		return FieldAccess{}, false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil {
+		return FieldAccess{}, false
+	}
+	access, exists := index.relations[context].byName[name]
+	return access, exists
+}
+
+func (graph *Graph) QueryRelation(canonicalLabel, name string) (FieldAccess, bool) {
+	return graph.Relation(canonicalLabel, name, RelationQuery)
+}
+
+func (graph *Graph) SelectRelatedRelation(canonicalLabel, name string) (FieldAccess, bool) {
+	return graph.Relation(canonicalLabel, name, RelationSelectRelated)
+}
+
+func (graph *Graph) PrefetchRelatedRelation(canonicalLabel, name string) (FieldAccess, bool) {
+	return graph.Relation(canonicalLabel, name, RelationPrefetchRelated)
+}
+
 func (graph *Graph) Manager(canonicalLabel, name string) (*ManagerRef, bool) {
 	if graph == nil {
 		return nil, false
@@ -498,6 +750,26 @@ func (graph *Graph) Manager(canonicalLabel, name string) (*ManagerRef, bool) {
 	}
 	manager, exists := index.managers[name]
 	return manager, exists
+}
+
+func (graph *Graph) QuerySet(canonicalLabel, class string) (*QuerySetRef, bool) {
+	if graph == nil {
+		return nil, false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil {
+		return nil, false
+	}
+	querySet, exists := index.querySets[class]
+	return querySet, exists
+}
+
+func (graph *Graph) QuerySetMethod(canonicalLabel, class, name string) (*MethodRef, bool) {
+	querySet, exists := graph.QuerySet(canonicalLabel, class)
+	if !exists {
+		return nil, false
+	}
+	return querySet.Method(name)
 }
 
 func (graph *Graph) VisitQueryFields(canonicalLabel string, visit func(FieldAccess) bool) bool {
@@ -538,6 +810,66 @@ func (graph *Graph) VisitManagers(canonicalLabel string, visit func(*ManagerRef)
 	}
 	for _, manager := range index.managerOrder {
 		if !visit(manager) {
+			break
+		}
+	}
+	return true
+}
+
+func (graph *Graph) VisitRelations(canonicalLabel string, context RelationContext, visit func(FieldAccess) bool) bool {
+	if graph == nil || context >= relationContextCount {
+		return false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil {
+		return false
+	}
+	for _, access := range index.relations[context].ordered {
+		if !visit(access) {
+			break
+		}
+	}
+	return true
+}
+
+func (graph *Graph) VisitQueryRelations(canonicalLabel string, visit func(FieldAccess) bool) bool {
+	return graph.VisitRelations(canonicalLabel, RelationQuery, visit)
+}
+
+func (graph *Graph) VisitSelectRelatedRelations(canonicalLabel string, visit func(FieldAccess) bool) bool {
+	return graph.VisitRelations(canonicalLabel, RelationSelectRelated, visit)
+}
+
+func (graph *Graph) VisitPrefetchRelatedRelations(canonicalLabel string, visit func(FieldAccess) bool) bool {
+	return graph.VisitRelations(canonicalLabel, RelationPrefetchRelated, visit)
+}
+
+func (graph *Graph) VisitQuerySets(canonicalLabel string, visit func(*QuerySetRef) bool) bool {
+	if graph == nil {
+		return false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil {
+		return false
+	}
+	for _, querySet := range index.querySetOrder {
+		if !visit(querySet) {
+			break
+		}
+	}
+	return true
+}
+
+func (graph *Graph) VisitQuerySetMethods(canonicalLabel string, visit func(*MethodRef) bool) bool {
+	if graph == nil {
+		return false
+	}
+	index := graph.canonical[canonicalLabel]
+	if index == nil {
+		return false
+	}
+	for _, method := range index.methodOrder {
+		if !visit(method) {
 			break
 		}
 	}
@@ -595,6 +927,93 @@ func (field *FieldRef) SourceModel() string {
 	return field.field.SourceModel
 }
 
+func (field *FieldRef) IsRelation() bool {
+	return field != nil && field.field.IsRelation
+}
+
+func (field *FieldRef) RelationDirection() (RelationDirection, bool) {
+	if field == nil || field.field.RelationDirection == nil {
+		return "", false
+	}
+	return RelationDirection(*field.field.RelationDirection), true
+}
+
+func (field *FieldRef) RelationCardinality() (RelationCardinality, bool) {
+	if field == nil || field.field.RelationCardinality == nil {
+		return "", false
+	}
+	return RelationCardinality(*field.field.RelationCardinality), true
+}
+
+func (field *FieldRef) Attname() (string, bool) {
+	if field == nil || field.field.Attname == nil {
+		return "", false
+	}
+	return *field.field.Attname, true
+}
+
+func (field *FieldRef) QueryName() (string, bool) {
+	if field == nil || field.field.QueryName == nil {
+		return "", false
+	}
+	return *field.field.QueryName, true
+}
+
+func (field *FieldRef) AccessorName() (string, bool) {
+	if field == nil || field.field.AccessorName == nil {
+		return "", false
+	}
+	return *field.field.AccessorName, true
+}
+
+func (field *FieldRef) Lookups() []string {
+	if field == nil {
+		return nil
+	}
+	return cloneStrings(field.field.Lookups)
+}
+
+func (field *FieldRef) UnsupportedLookups() []string {
+	if field == nil {
+		return nil
+	}
+	return cloneStrings(field.field.UnsupportedLookups)
+}
+
+func (field *FieldRef) Transforms() []string {
+	if field == nil {
+		return nil
+	}
+	return cloneStrings(field.field.Transforms)
+}
+
+func (field *FieldRef) LookupPaths() []LookupPath {
+	if field == nil {
+		return nil
+	}
+	paths := make([]LookupPath, len(field.field.LookupPaths))
+	for index, path := range field.field.LookupPaths {
+		paths[index] = cloneLookupPath(path)
+	}
+	return paths
+}
+
+func (field *FieldRef) VisitLookupPaths(visit func(LookupPath) bool) bool {
+	if field == nil {
+		return false
+	}
+	for _, path := range field.field.LookupPaths {
+		if !visit(cloneLookupPath(path)) {
+			break
+		}
+	}
+	return true
+}
+
+func (field *FieldRef) LookupPathsTruncated() bool {
+	return field != nil && field.field.LookupPathsTruncated
+}
+
 func (field *FieldRef) RelatedModel() (string, bool) {
 	if field == nil || field.related == nil {
 		return "", false
@@ -602,9 +1021,170 @@ func (field *FieldRef) RelatedModel() (string, bool) {
 	return field.related.model.CanonicalLabel, true
 }
 
-func (manager *ManagerRef) Name() string { return manager.manager.Name }
+func (manager *ManagerRef) Name() string {
+	if manager == nil {
+		return ""
+	}
+	return manager.manager.Name
+}
 
-func (manager *ManagerRef) OwnerClass() string { return manager.manager.OwnerClass }
+func (manager *ManagerRef) OwnerClass() string {
+	if manager == nil {
+		return ""
+	}
+	return manager.manager.OwnerClass
+}
+
+func (manager *ManagerRef) QuerySetClass() (string, bool) {
+	if manager == nil || manager.manager.QuerySetClass == nil {
+		return "", false
+	}
+	return *manager.manager.QuerySetClass, true
+}
+
+func (manager *ManagerRef) QuerySet() (*QuerySetRef, bool) {
+	if manager == nil || manager.querySet == nil {
+		return nil, false
+	}
+	return manager.querySet, true
+}
+
+func (manager *ManagerRef) Method(name string) (*MethodRef, bool) {
+	if manager == nil {
+		return nil, false
+	}
+	method, exists := manager.methods[name]
+	return method, exists
+}
+
+func (manager *ManagerRef) QuerySetMethod(name string) (*MethodRef, bool) {
+	if manager == nil {
+		return nil, false
+	}
+	method, exists := manager.querySetMethods[name]
+	return method, exists
+}
+
+func (manager *ManagerRef) VisitMethods(visit func(*MethodRef) bool) bool {
+	if manager == nil {
+		return false
+	}
+	for _, method := range manager.methodOrder {
+		if !visit(method) {
+			break
+		}
+	}
+	return true
+}
+
+func (manager *ManagerRef) VisitQuerySetMethods(visit func(*MethodRef) bool) bool {
+	if manager == nil {
+		return false
+	}
+	for _, method := range manager.querySetMethodOrder {
+		if !visit(method) {
+			break
+		}
+	}
+	return true
+}
+
+func (manager *ManagerRef) IsDefault() bool {
+	return manager != nil && manager.manager.Default
+}
+
+func (manager *ManagerRef) IsLocal() bool {
+	return manager != nil && manager.manager.Local
+}
+
+func (manager *ManagerRef) IsAutoCreated() bool {
+	return manager != nil && manager.manager.AutoCreated
+}
+
+func (querySet *QuerySetRef) Class() string {
+	if querySet == nil {
+		return ""
+	}
+	return querySet.class
+}
+
+func (querySet *QuerySetRef) Method(name string) (*MethodRef, bool) {
+	if querySet == nil {
+		return nil, false
+	}
+	method, exists := querySet.methods[name]
+	return method, exists
+}
+
+func (querySet *QuerySetRef) VisitMethods(visit func(*MethodRef) bool) bool {
+	if querySet == nil {
+		return false
+	}
+	for _, method := range querySet.methodOrder {
+		if !visit(method) {
+			break
+		}
+	}
+	return true
+}
+
+func (method *MethodRef) Name() string {
+	if method == nil {
+		return ""
+	}
+	return method.method.Name
+}
+
+func (method *MethodRef) OwnerClass() string {
+	if method == nil {
+		return ""
+	}
+	return method.method.OwnerClass
+}
+
+func (method *MethodRef) Signature() (string, bool) {
+	if method == nil || method.method.Signature == nil {
+		return "", false
+	}
+	return *method.method.Signature, true
+}
+
+func (method *MethodRef) Docstring() (string, bool) {
+	if method == nil || method.method.Docstring == nil {
+		return "", false
+	}
+	return *method.method.Docstring, true
+}
+
+func (method *MethodRef) SourceRange() (SourceRange, bool) {
+	if method == nil || method.method.SourceRange == nil {
+		return SourceRange{}, false
+	}
+	return *method.method.SourceRange, true
+}
+
+func (method *MethodRef) Chainable() bool {
+	return method != nil && method.method.Chainable
+}
+
+func (method *MethodRef) AssumedChainable() bool {
+	return method != nil && method.method.AssumedChainable
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string{}, values...)
+}
+
+func cloneLookupPath(path LookupPath) LookupPath {
+	return LookupPath{
+		Transforms: cloneStrings(path.Transforms),
+		Kinds:      cloneStrings(path.Kinds),
+		Lookups:    cloneStrings(path.Lookups),
+	}
+}
 
 func cloneSnapshot(snapshot Snapshot) (Snapshot, error) {
 	payload, err := json.Marshal(snapshot)

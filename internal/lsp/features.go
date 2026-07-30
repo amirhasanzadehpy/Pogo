@@ -28,9 +28,13 @@ func (features *Features) Capabilities() protocol.ServerCapabilities {
 	return protocol.ServerCapabilities{
 		TextDocumentSync: protocol.TextDocumentSyncOptions{OpenClose: &openClose, Change: &change},
 		CompletionProvider: &protocol.CompletionOptions{
-			TriggerCharacters: []string{"."},
+			TriggerCharacters: []string{".", "_", "\"", "'"},
 		},
 		HoverProvider: true,
+		SignatureHelpProvider: &protocol.SignatureHelpOptions{
+			TriggerCharacters:   []string{"(", ","},
+			RetriggerCharacters: []string{","},
+		},
 	}
 }
 
@@ -100,6 +104,13 @@ func (features *Features) hover(_ *glsp.Context, params *protocol.HoverParams) (
 	return features.Hover(string(params.TextDocument.URI), analysisPosition(params.Position))
 }
 
+func (features *Features) signatureHelp(_ *glsp.Context, params *protocol.SignatureHelpParams) (*protocol.SignatureHelp, error) {
+	if features == nil || params == nil {
+		return nil, nil
+	}
+	return features.SignatureHelp(string(params.TextDocument.URI), analysisPosition(params.Position))
+}
+
 func (features *Features) Completion(uri string, position analysis.Position) (*protocol.CompletionList, error) {
 	snapshot, ok := features.documents.Snapshot(uri)
 	if !ok {
@@ -147,6 +158,20 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 			}
 			return true
 		})
+	case analysis.ContextORMPath:
+		if context.Path.OnSeparator {
+			return nil, nil
+		}
+		for _, candidate := range analysis.CompletePath(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment) {
+			items = append(items, pathCompletion(candidate, replacement))
+		}
+	case analysis.ContextMethodMember:
+		analysis.VisitMethods(graph, context.Value, func(method *schema.MethodRef) bool {
+			if strings.HasPrefix(method.Name(), context.Identifier) {
+				items = append(items, methodCompletion(method, replacement))
+			}
+			return true
+		})
 	}
 	if len(items) == 0 {
 		return nil, nil
@@ -170,6 +195,35 @@ func (features *Features) Hover(uri string, position analysis.Position) (*protoc
 	}
 	var field schema.FieldAccess
 	switch context.Kind {
+	case analysis.ContextORMPath:
+		if context.Path.OnSeparator {
+			return nil, nil
+		}
+		resolved, exists := analysis.ResolvePathSegment(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment)
+		if !exists || resolved.Field == nil || resolved.Text == "" {
+			return nil, nil
+		}
+		range_, valid := protocolRange(snapshot.Source, resolved.Range)
+		if !valid {
+			return nil, nil
+		}
+		content := fieldMarkdown(schema.FieldAccess{Name: resolved.Text, Field: resolved.Field})
+		switch resolved.Kind {
+		case analysis.PathCandidateTransform:
+			content += fmt.Sprintf("\n\nDjango transform: `%s`", markdownCode(resolved.Text))
+		case analysis.PathCandidateLookup:
+			content += fmt.Sprintf("\n\nDjango lookup: `%s`", markdownCode(resolved.Text))
+		}
+		return &protocol.Hover{Contents: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: content}, Range: &range_}, nil
+	case analysis.ContextMethodMember:
+		if context.Method == nil {
+			return nil, nil
+		}
+		range_, valid := protocolRange(snapshot.Source, context.Replacement)
+		if !valid {
+			return nil, nil
+		}
+		return &protocol.Hover{Contents: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: methodMarkdown(context.Method)}, Range: &range_}, nil
 	case analysis.ContextQueryKeyword:
 		field, ok = graph.QueryAccess(context.Value.CanonicalLabel, context.Identifier)
 	case analysis.ContextInstanceMember:
@@ -202,6 +256,44 @@ func (features *Features) Hover(uri string, position analysis.Position) (*protoc
 	}, nil
 }
 
+func (features *Features) SignatureHelp(uri string, position analysis.Position) (*protocol.SignatureHelp, error) {
+	snapshot, ok := features.documents.Snapshot(uri)
+	if !ok {
+		return nil, nil
+	}
+	offset, ok := analysis.ByteOffset(snapshot.Source, position)
+	if !ok {
+		return nil, errors.New("signature help position is not valid for the document")
+	}
+	graph, _ := features.cache.Load()
+	context, ok := analysis.AnalyzeSignatureSyntax(snapshot.Source, offset, graph, snapshot.Syntax)
+	if !ok {
+		return nil, nil
+	}
+	signature, ok := context.Method.Signature()
+	if !ok {
+		return nil, nil
+	}
+	parsed, ok := parseSignature(signature)
+	if !ok {
+		return nil, nil
+	}
+	parameters := make([]protocol.ParameterInformation, len(parsed.parameters))
+	for index, parameter := range parsed.parameters {
+		parameters[index] = protocol.ParameterInformation{Label: parameter.label}
+	}
+	information := protocol.SignatureInformation{Label: context.Method.Name() + signature, Parameters: parameters}
+	if docstring, exists := context.Method.Docstring(); exists && strings.TrimSpace(docstring) != "" {
+		information.Documentation = protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: markdownText(strings.TrimSpace(docstring))}
+	}
+	help := &protocol.SignatureHelp{Signatures: []protocol.SignatureInformation{information}}
+	if active, exists := parsed.activeParameter(context.PositionalIndex, context.Keyword); exists {
+		value := protocol.UInteger(active)
+		help.ActiveParameter = &value
+	}
+	return help, nil
+}
+
 func fieldCompletion(access schema.FieldAccess, replacement protocol.Range) protocol.CompletionItem {
 	kind := protocol.CompletionItemKindField
 	detail := access.Field.Type()
@@ -228,6 +320,39 @@ func managerCompletion(manager *schema.ManagerRef, replacement protocol.Range) p
 		Documentation: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: managerMarkdown(manager)},
 		SortText:      &sortText,
 		TextEdit:      protocol.TextEdit{Range: replacement, NewText: manager.Name()},
+	}
+}
+
+func pathCompletion(candidate analysis.PathCandidate, replacement protocol.Range) protocol.CompletionItem {
+	if candidate.Kind == analysis.PathCandidateField {
+		item := fieldCompletion(schema.FieldAccess{Name: candidate.Name, Field: candidate.Field}, replacement)
+		sortText := fmt.Sprintf("%d-%s", candidate.Rank, candidate.Name)
+		item.SortText = &sortText
+		return item
+	}
+	kind := protocol.CompletionItemKindKeyword
+	detail := "Django transform"
+	if candidate.Kind == analysis.PathCandidateLookup {
+		detail = "Django lookup"
+	}
+	sortText := fmt.Sprintf("%d-%s", candidate.Rank, candidate.Name)
+	documentation := fmt.Sprintf("%s on `%s`", detail, markdownCode(candidate.Field.Type()))
+	return protocol.CompletionItem{
+		Label: candidate.Name, Kind: &kind, Detail: &detail, SortText: &sortText,
+		Documentation: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: documentation},
+		TextEdit:      protocol.TextEdit{Range: replacement, NewText: candidate.Name},
+	}
+}
+
+func methodCompletion(method *schema.MethodRef, replacement protocol.Range) protocol.CompletionItem {
+	kind := protocol.CompletionItemKindMethod
+	signature, _ := method.Signature()
+	detail := method.OwnerClass() + "." + method.Name() + signature
+	sortText := "0-" + method.Name()
+	return protocol.CompletionItem{
+		Label: method.Name(), Kind: &kind, Detail: &detail, SortText: &sortText,
+		Documentation: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: methodMarkdown(method)},
+		TextEdit:      protocol.TextEdit{Range: replacement, NewText: method.Name()},
 	}
 }
 
@@ -259,6 +384,19 @@ func fieldMarkdown(access schema.FieldAccess) string {
 
 func managerMarkdown(manager *schema.ManagerRef) string {
 	return fmt.Sprintf("**%s**  \nDjango manager `%s`", markdownText(manager.Name()), markdownCode(manager.OwnerClass()))
+}
+
+func methodMarkdown(method *schema.MethodRef) string {
+	var content strings.Builder
+	signature, _ := method.Signature()
+	fmt.Fprintf(&content, "**%s**  \n`%s.%s%s`", markdownText(method.Name()), markdownCode(method.OwnerClass()), markdownCode(method.Name()), markdownCode(signature))
+	if docstring, ok := method.Docstring(); ok && strings.TrimSpace(docstring) != "" {
+		fmt.Fprintf(&content, "\n\n%s", markdownText(strings.TrimSpace(docstring)))
+	}
+	if method.AssumedChainable() {
+		content.WriteString("\n\n_Chainability inferred from the custom QuerySet contract._")
+	}
+	return content.String()
 }
 
 func protocolRange(source []byte, byteRange analysis.ByteRange) (protocol.Range, bool) {

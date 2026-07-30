@@ -140,6 +140,7 @@ class IntrospectionTests(unittest.TestCase):
             "auto_created",
             "source_range",
             "methods",
+            "queryset_methods",
         }
         method_keys = {
             "name",
@@ -168,6 +169,9 @@ class IntrospectionTests(unittest.TestCase):
                 self.assertEqual(set(manager), manager_keys)
                 for method in manager["methods"]:
                     self.assertEqual(set(method), method_keys)
+                for binding in manager["queryset_methods"]:
+                    self.assertEqual(set(binding), {"method", "available_on_manager"})
+                    self.assertEqual(set(binding["method"]), method_keys)
             for method in model["queryset_methods"]:
                 self.assertEqual(set(method), method_keys)
             for field in model["fields"].values():
@@ -273,6 +277,11 @@ class IntrospectionTests(unittest.TestCase):
         self.assertEqual(managers_by_name["objects"]["queryset_class"], "myapp.models.BookQuerySet")
         self.assertTrue(managers_by_name["objects"]["default"])
         self.assertEqual(managers_by_name["objects"]["methods"], [])
+        self.assertEqual(
+            [binding["method"]["name"] for binding in managers_by_name["objects"]["queryset_methods"]],
+            ["active", "published"],
+        )
+        self.assertTrue(all(binding["available_on_manager"] for binding in managers_by_name["objects"]["queryset_methods"]))
         self.assertEqual(book["default_manager"], "objects")
         self.assertEqual(book["base_manager"], {"name": "_base_manager", "owner_class": "django.db.models.manager.Manager"})
 
@@ -622,6 +631,18 @@ class IntrospectionTests(unittest.TestCase):
             self.assertFalse(methods_by_name[method_name]["assumed_chainable"])
         dangerous = next(manager for manager in target["managers"] if manager["name"] == "danger")
         self.assertEqual([method["name"] for method in dangerous["methods"]], ["explode"])
+
+        combined = sample_models["CombinedTarget"]
+        combined_manager = next(manager for manager in combined["managers"] if manager["name"] == "objects")
+        self.assertEqual([method["name"] for method in combined_manager["methods"]], ["managed"])
+        bindings = {
+            binding["method"]["name"]: binding["available_on_manager"]
+            for binding in combined_manager["queryset_methods"]
+        }
+        self.assertTrue(bindings["filter"])
+        self.assertFalse(bindings["visible"])
+        self.assertFalse(bindings["all"])
+        self.assertTrue(bindings["_visible"])
         constraints = {constraint["name"]: constraint for constraint in target["constraints"]}
         self.assertEqual(
             set(constraints["target_name_nonempty"]),
@@ -743,6 +764,40 @@ class Target(models.Model):
             models.CheckConstraint(**({"condition": Q(name__gt="")} if django.VERSION >= (5, 1) else {"check": Q(name__gt="")}), name="target_name_nonempty"),
             models.UniqueConstraint(fields=["name"], name="target_name_unique"),
         ]
+
+
+class CombinedQuerySet(models.QuerySet):
+    def all(self) -> bool:
+        raise RuntimeError("custom all was executed")
+
+    def filter(self) -> bool:
+        raise RuntimeError("custom filter was executed")
+
+    filter.queryset_only = True
+
+    def visible(self):
+        raise RuntimeError("visible queryset method was executed")
+
+    def _visible(self):
+        raise RuntimeError("private visible queryset method was executed")
+
+    _visible.queryset_only = False
+
+
+class CombinedManager(models.Manager):
+    def managed(self) -> models.QuerySet:
+        raise RuntimeError("manager method was executed")
+
+    @property
+    def visible(self):
+        raise RuntimeError("manager descriptor was executed")
+
+
+CombinedManagerClass = CombinedManager.from_queryset(CombinedQuerySet)
+
+
+class CombinedTarget(models.Model):
+    objects = CombinedManagerClass()
 
 
 class TargetProxy(Target):

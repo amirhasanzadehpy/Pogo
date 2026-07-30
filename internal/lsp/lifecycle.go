@@ -82,6 +82,7 @@ func NewLifecycleContextWithFactory(ctx context.Context, cancel context.CancelFu
 		lifecycle.handler.TextDocumentDidClose = lifecycle.features.didClose
 		lifecycle.handler.TextDocumentCompletion = lifecycle.features.completion
 		lifecycle.handler.TextDocumentHover = lifecycle.features.hover
+		lifecycle.handler.TextDocumentSignatureHelp = lifecycle.features.signatureHelp
 	}
 	return lifecycle
 }

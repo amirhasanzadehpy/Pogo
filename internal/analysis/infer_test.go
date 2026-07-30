@@ -50,6 +50,7 @@ func TestAnalyzeModelAndInstanceMembers(t *testing.T) {
 		{"first return", "from myapp.models import Book\nbook = Book.objects.first()\nbook.au|", ContextInstanceMember},
 		{"spaced constructor", "from myapp.models import Book\nbook = Book ()\nbook.au|", ContextInstanceMember},
 		{"parenthesis string return", "from myapp.models import Book\nbook = Book.objects.get (title=\"(\")\nbook.au|", ContextInstanceMember},
+		{"Unicode field", "from myapp.models import Book\nbook = Book()\nbook.café|", ContextInstanceMember},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -62,11 +63,10 @@ func TestAnalyzeModelAndInstanceMembers(t *testing.T) {
 	}
 }
 
-func TestAnalyzeRejectsUnknownAndDeepPaths(t *testing.T) {
+func TestAnalyzeRejectsUnknownAndInvalidContexts(t *testing.T) {
 	graph := inferenceTestGraph(t)
 	for _, sourceWithCursor := range []string{
 		"unknown.au|",
-		"from myapp.models import Book\nBook.objects.filter(author__na|)",
 		"from myapp.models import Book\nvalue = dynamic()\nvalue.au|",
 		"from myapp.models import Book\nBook.objects.filter(title=au|)",
 		"from myapp.models import Book\nBook.objects.filter(title=\"au|\")",
@@ -219,6 +219,7 @@ func inferenceTestGraph(t *testing.T) *schema.Graph {
 		"Book": testModel("Book", map[string]schema.Field{
 			"id":    testField("myapp.Book", "id", "django.db.models.fields.BigAutoField"),
 			"title": testField("myapp.Book", "title", "django.db.models.fields.CharField"),
+			"café":  testField("myapp.Book", "café", "django.db.models.fields.CharField"),
 			"author": {
 				Type:              "django.db.models.fields.related.ForeignKey",
 				InternalType:      "ForeignKey",

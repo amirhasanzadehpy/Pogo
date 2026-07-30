@@ -56,14 +56,20 @@ type BaseManager struct {
 }
 
 type Manager struct {
-	Name          string       `json:"name"`
-	OwnerClass    string       `json:"owner_class"`
-	QuerySetClass *string      `json:"queryset_class"`
-	Default       bool         `json:"default"`
-	Local         bool         `json:"local"`
-	AutoCreated   bool         `json:"auto_created"`
-	SourceRange   *SourceRange `json:"source_range"`
-	Methods       []Method     `json:"methods"`
+	Name            string                `json:"name"`
+	OwnerClass      string                `json:"owner_class"`
+	QuerySetClass   *string               `json:"queryset_class"`
+	Default         bool                  `json:"default"`
+	Local           bool                  `json:"local"`
+	AutoCreated     bool                  `json:"auto_created"`
+	SourceRange     *SourceRange          `json:"source_range"`
+	Methods         []Method              `json:"methods"`
+	QuerySetMethods []BoundQuerySetMethod `json:"queryset_methods"`
+}
+
+type BoundQuerySetMethod struct {
+	Method             Method `json:"method"`
+	AvailableOnManager bool   `json:"available_on_manager"`
 }
 
 type Method struct {

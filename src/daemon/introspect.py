@@ -560,11 +560,11 @@ def custom_methods(cls, source_index, assume_queryset):
     seen = set()
     for owner in cls.__mro__:
         if owner.__module__.startswith("django."):
-            break
+            continue
         for name, raw in vars(owner).items():
             if isinstance(raw, (staticmethod, classmethod)):
                 raw = raw.__func__
-            if name.startswith("_") or name in seen or not inspect.isfunction(raw):
+            if (name.startswith("_") and getattr(raw, "queryset_only", None) is not False) or name in seen or not inspect.isfunction(raw):
                 continue
             seen.add(name)
             try:
@@ -585,6 +585,16 @@ def custom_methods(cls, source_index, assume_queryset):
             )
     methods.sort(key=lambda item: (item["name"], item["owner_class"]))
     return methods
+
+
+def queryset_method_available_on_manager(manager, name):
+    # BaseManager.all() intentionally bypasses QuerySet.all(). Other existing
+    # manager proxies dispatch through get_queryset(), including overridden
+    # queryset methods marked queryset_only.
+    if name == "all":
+        return False
+    member = inspect.getattr_static(type(manager), name, None)
+    return callable(member)
 
 
 def manager_source_range(model, manager, source_index):
@@ -617,6 +627,13 @@ def serialize_managers(model, source_index):
                 "auto_created": bool(getattr(manager, "auto_created", False)),
                 "source_range": manager_source_range(model, manager, source_index),
                 "methods": manager_methods,
+                "queryset_methods": [
+                    {
+                        "method": method,
+                        "available_on_manager": queryset_method_available_on_manager(manager, method["name"]),
+                    }
+                    for method in current_queryset_methods
+                ],
             }
         )
     methods = [queryset_methods[key] for key in sorted(queryset_methods)]

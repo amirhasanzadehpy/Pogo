@@ -1,0 +1,780 @@
+package analysis
+
+import (
+	"sort"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/amirhasanzadehpy/Pogo/internal/schema"
+)
+
+const (
+	MaxPathBytes    = 4096
+	MaxPathSegments = 64
+)
+
+type PathMode uint8
+
+const (
+	PathLookup PathMode = iota
+	PathProjection
+	PathFields
+	PathSelectRelated
+	PathPrefetchRelated
+)
+
+type PathSegment struct {
+	Text  string
+	Range ByteRange
+}
+
+type PathContext struct {
+	Method         string
+	Mode           PathMode
+	Segments       []PathSegment
+	ActiveSegment  int
+	Replacement    ByteRange
+	Arguments      ByteRange
+	ActiveArgument int
+	OnSeparator    bool
+}
+
+type SignatureContext struct {
+	Value           Value
+	Method          *schema.MethodRef
+	ActiveArgument  int
+	PositionalIndex int
+	Keyword         string
+}
+
+func AnalyzeSignatureSyntax(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement) (SignatureContext, bool) {
+	call, ok := enclosingCall(source, offset)
+	if !ok {
+		return SignatureContext{}, false
+	}
+	value := inferExpression(strings.TrimSpace(string(source[call.receiver.Start:call.receiver.End])), source[:offset], graph, syntax, offset)
+	method, ok := ResolveMethod(graph, value, call.method)
+	if !ok {
+		return SignatureContext{}, false
+	}
+	argument := activeArgument(source, call.argumentsStart, offset)
+	end := activeArgumentEnd(source, argument.start)
+	keyword, _ := argumentKeyword(source[argument.start:end])
+	return SignatureContext{
+		Value: value, Method: method, ActiveArgument: argument.index,
+		PositionalIndex: positionalArgumentIndex(source, call.argumentsStart, argument.start), Keyword: keyword,
+	}, true
+}
+
+type PathCandidateKind uint8
+
+const (
+	PathCandidateField PathCandidateKind = iota
+	PathCandidateTransform
+	PathCandidateLookup
+)
+
+type PathCandidate struct {
+	Name  string
+	Kind  PathCandidateKind
+	Field *schema.FieldRef
+	Rank  int
+}
+
+type ResolvedPathSegment struct {
+	PathSegment
+	Kind  PathCandidateKind
+	Field *schema.FieldRef
+}
+
+func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement) (Context, bool) {
+	call, ok := enclosingCall(source, offset)
+	if !ok {
+		return Context{}, false
+	}
+	mode, stringPath, ok := pathMethod(call.method)
+	if !ok {
+		return Context{}, false
+	}
+	value := inferExpression(strings.TrimSpace(string(source[call.receiver.Start:call.receiver.End])), source[:offset], graph, syntax, offset)
+	if value.Kind != ValueManager && value.Kind != ValueQuerySet {
+		return Context{}, false
+	}
+	if _, overridden := ResolveMethod(graph, value, call.method); overridden {
+		return Context{}, false
+	}
+	argument := activeArgument(source, call.argumentsStart, offset)
+	var pathRange ByteRange
+	if stringPath {
+		pathRange, ok = stringPathRange(source, argument, offset)
+	} else {
+		pathRange, ok = keywordPathRange(source, argument, offset)
+	}
+	if !ok || pathRange.End-pathRange.Start > MaxPathBytes {
+		return Context{}, false
+	}
+	segments, active, onSeparator, ok := splitPath(source, pathRange, offset)
+	if !ok || len(segments) > MaxPathSegments {
+		return Context{}, false
+	}
+	path := &PathContext{
+		Method: call.method, Mode: mode, Segments: segments, ActiveSegment: active,
+		Replacement: segments[active].Range,
+		Arguments:   ByteRange{Start: call.argumentsStart, End: offset}, ActiveArgument: argument.index,
+		OnSeparator: onSeparator,
+	}
+	if !stringPath && len(segments) == 1 {
+		return Context{Kind: ContextQueryKeyword, Value: value, Identifier: segments[0].Text, Replacement: path.Replacement}, true
+	}
+	return Context{Kind: ContextORMPath, Value: value, Identifier: segments[active].Text, Replacement: path.Replacement, Path: path}, true
+}
+
+type callContext struct {
+	method         string
+	receiver       ByteRange
+	argumentsStart int
+}
+
+func enclosingCall(source []byte, offset int) (callContext, bool) {
+	if offset < 0 || offset > len(source) {
+		return callContext{}, false
+	}
+	code := pythonCodeMask(source, offset)
+	stack := make([]int, 0, 8)
+	for index := 0; index < offset; index++ {
+		if !code[index] {
+			continue
+		}
+		switch source[index] {
+		case '(':
+			stack = append(stack, index)
+		case ')':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	if len(stack) == 0 {
+		return callContext{}, false
+	}
+	opening := stack[len(stack)-1]
+	nameEnd := opening
+	for nameEnd > 0 && isSpace(source[nameEnd-1]) {
+		nameEnd--
+	}
+	nameStart := nameEnd
+	for nameStart > 0 && isIdentifierByte(source[nameStart-1]) && code[nameStart-1] {
+		nameStart--
+	}
+	if nameStart == nameEnd || nameStart == 0 || source[nameStart-1] != '.' {
+		return callContext{}, false
+	}
+	receiver := expressionBefore(source, nameStart-1)
+	if receiver.Start == receiver.End {
+		return callContext{}, false
+	}
+	return callContext{method: string(source[nameStart:nameEnd]), receiver: receiver, argumentsStart: opening + 1}, true
+}
+
+type argumentContext struct {
+	start int
+	index int
+}
+
+func activeArgument(source []byte, start, offset int) argumentContext {
+	argument := argumentContext{start: start}
+	depth := 0
+	var quote byte
+	triple := false
+	escaped := false
+	comment := false
+	for index := start; index < offset; index++ {
+		value := source[index]
+		if comment {
+			if value == '\n' {
+				comment = false
+			}
+			continue
+		}
+		if quote != 0 {
+			if triple {
+				if value == quote && index+2 < offset && source[index+1] == quote && source[index+2] == quote {
+					quote, triple = 0, false
+					index += 2
+				}
+				continue
+			}
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch value {
+		case '\'', '"':
+			quote = value
+			if index+2 < offset && source[index+1] == value && source[index+2] == value {
+				triple = true
+				index += 2
+			}
+		case '#':
+			comment = true
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				argument.start = index + 1
+				argument.index++
+			}
+		}
+	}
+	return argument
+}
+
+func positionalArgumentIndex(source []byte, start, activeStart int) int {
+	position := 0
+	segmentStart := start
+	depth := 0
+	var quote byte
+	escaped := false
+	comment := false
+	for index := start; index < activeStart; index++ {
+		value := source[index]
+		if comment {
+			if value == '\n' {
+				comment = false
+			}
+			continue
+		}
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch value {
+		case '\'', '"':
+			quote = value
+		case '#':
+			comment = true
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				if _, keyword := argumentKeyword(source[segmentStart:index]); !keyword {
+					position++
+				}
+				segmentStart = index + 1
+			}
+		}
+	}
+	return position
+}
+
+func activeArgumentEnd(source []byte, start int) int {
+	depth := 0
+	var quote byte
+	escaped := false
+	comment := false
+	for index := start; index < len(source); index++ {
+		value := source[index]
+		if comment {
+			if value == '\n' {
+				comment = false
+			}
+			continue
+		}
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch value {
+		case '\'', '"':
+			quote = value
+		case '#':
+			comment = true
+		case '(', '[', '{':
+			depth++
+		case ')':
+			if depth == 0 {
+				return index
+			}
+			depth--
+		case ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				return index
+			}
+		}
+	}
+	return len(source)
+}
+
+func argumentKeyword(argument []byte) (string, bool) {
+	depth := 0
+	var quote byte
+	escaped := false
+	for index, value := range argument {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch value {
+		case '\'', '"':
+			quote = byte(value)
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case '=':
+			if depth == 0 {
+				name := strings.TrimSpace(string(argument[:index]))
+				if name != "" && identifierText(name) {
+					return name, true
+				}
+				return "", false
+			}
+		}
+	}
+	return "", false
+}
+
+func identifierText(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, rune_ := range value {
+		if !isIdentifierRune(rune_) {
+			return false
+		}
+	}
+	return true
+}
+
+func keywordPathRange(source []byte, argument argumentContext, offset int) (ByteRange, bool) {
+	start := argument.start
+	for start < offset && isSpace(source[start]) {
+		start++
+	}
+	if start > offset {
+		return ByteRange{}, false
+	}
+	if start < offset && !identifierText(string(source[start:offset])) {
+		return ByteRange{}, false
+	}
+	end := offset
+	for end < len(source) {
+		rune_, size := utf8.DecodeRune(source[end:])
+		if rune_ == utf8.RuneError && size == 1 || !isIdentifierRune(rune_) {
+			break
+		}
+		end += size
+	}
+	if end < len(source) {
+		index := end
+		for index < len(source) && isSpace(source[index]) {
+			index++
+		}
+		if index < len(source) && source[index] != '=' && source[index] != ',' && source[index] != ')' {
+			return ByteRange{}, false
+		}
+	}
+	return ByteRange{Start: start, End: end}, true
+}
+
+func stringPathRange(source []byte, argument argumentContext, offset int) (ByteRange, bool) {
+	start := argument.start
+	for start < offset && isSpace(source[start]) {
+		start++
+	}
+	prefixStart := start
+	for start < offset && isIdentifierByte(source[start]) {
+		start++
+	}
+	prefix := strings.ToLower(string(source[prefixStart:start]))
+	if strings.ContainsAny(prefix, "bf") || (prefix != "" && prefix != "r" && prefix != "u") {
+		return ByteRange{}, false
+	}
+	if start >= len(source) || (source[start] != '\'' && source[start] != '"') {
+		return ByteRange{}, false
+	}
+	quote := source[start]
+	quoteWidth := 1
+	if start+2 < len(source) && source[start+1] == quote && source[start+2] == quote {
+		quoteWidth = 3
+	}
+	contentStart := start + quoteWidth
+	if offset < contentStart {
+		return ByteRange{}, false
+	}
+	end := contentStart
+	escaped := false
+	for end < len(source) {
+		if source[end] == '\\' {
+			escaped = !escaped
+			end++
+			continue
+		}
+		if source[end] == quote && !escaped {
+			if quoteWidth == 1 || end+2 < len(source) && source[end+1] == quote && source[end+2] == quote {
+				break
+			}
+		}
+		escaped = false
+		if source[end] == '\n' && quoteWidth == 1 {
+			break
+		}
+		end++
+	}
+	if offset > end || strings.ContainsRune(string(source[contentStart:end]), '\\') {
+		return ByteRange{}, false
+	}
+	return ByteRange{Start: contentStart, End: end}, true
+}
+
+func splitPath(source []byte, path ByteRange, offset int) ([]PathSegment, int, bool, bool) {
+	if offset < path.Start || offset > path.End {
+		return nil, 0, false, false
+	}
+	segments := make([]PathSegment, 0, 8)
+	start := path.Start
+	active := -1
+	onSeparator := false
+	for index := path.Start; index <= path.End; index++ {
+		separator := index+1 < path.End && source[index] == '_' && source[index+1] == '_'
+		if index == path.End || separator {
+			if separator && (offset == index || offset == index+1) {
+				onSeparator = true
+			}
+			segment := PathSegment{Text: string(source[start:index]), Range: ByteRange{Start: start, End: index}}
+			segments = append(segments, segment)
+			if offset >= start && offset <= index {
+				active = len(segments) - 1
+			}
+			if separator {
+				if offset == index+1 {
+					active = len(segments)
+				}
+				index++
+				start = index + 1
+			}
+		}
+	}
+	if active == len(segments) {
+		segments = append(segments, PathSegment{Range: ByteRange{Start: offset, End: offset}})
+	}
+	if len(segments) == 0 || active < 0 {
+		return nil, 0, false, false
+	}
+	return segments, active, onSeparator, true
+}
+
+func pathMethod(method string) (PathMode, bool, bool) {
+	switch method {
+	case "filter", "exclude", "get":
+		return PathLookup, false, true
+	case "values", "values_list":
+		return PathProjection, true, true
+	case "only", "defer":
+		return PathFields, true, true
+	case "select_related":
+		return PathSelectRelated, true, true
+	case "prefetch_related":
+		return PathPrefetchRelated, true, true
+	default:
+		return 0, false, false
+	}
+}
+
+func isSpace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+}
+
+type resolverState struct {
+	model         string
+	field         *schema.FieldRef
+	relationField *schema.FieldRef
+	transforms    []string
+}
+
+func CompletePath(graph *schema.Graph, canonicalLabel string, mode PathMode, segments []PathSegment, active int) []PathCandidate {
+	if graph == nil || active < 0 || active >= len(segments) {
+		return nil
+	}
+	state := resolverState{model: canonicalLabel}
+	for index := 0; index < active; index++ {
+		var ok bool
+		state, _, ok = consumePathSegment(graph, mode, state, segments[index], true)
+		if !ok {
+			return nil
+		}
+	}
+	candidates := candidatesForState(graph, mode, state)
+	prefix := segments[active].Text
+	filtered := candidates[:0]
+	for _, candidate := range candidates {
+		if strings.HasPrefix(candidate.Name, prefix) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	sort.SliceStable(filtered, func(left, right int) bool {
+		if filtered[left].Rank != filtered[right].Rank {
+			return filtered[left].Rank < filtered[right].Rank
+		}
+		return filtered[left].Name < filtered[right].Name
+	})
+	return filtered
+}
+
+func ResolvePathSegment(graph *schema.Graph, canonicalLabel string, mode PathMode, segments []PathSegment, target int) (ResolvedPathSegment, bool) {
+	if graph == nil || target < 0 || target >= len(segments) {
+		return ResolvedPathSegment{}, false
+	}
+	state := resolverState{model: canonicalLabel}
+	var resolved ResolvedPathSegment
+	for index := 0; index <= target; index++ {
+		var ok bool
+		state, resolved, ok = consumePathSegment(graph, mode, state, segments[index], index < target)
+		if !ok {
+			return ResolvedPathSegment{}, false
+		}
+	}
+	return resolved, true
+}
+
+func consumePathSegment(graph *schema.Graph, mode PathMode, state resolverState, segment PathSegment, hasMore bool) (resolverState, ResolvedPathSegment, bool) {
+	if segment.Text == "" {
+		return state, ResolvedPathSegment{}, false
+	}
+	if mode == PathSelectRelated || mode == PathPrefetchRelated {
+		context := schema.RelationSelectRelated
+		if mode == PathPrefetchRelated {
+			context = schema.RelationPrefetchRelated
+		}
+		access, ok := graph.Relation(state.model, segment.Text, context)
+		if !ok {
+			return state, ResolvedPathSegment{}, false
+		}
+		resolved := ResolvedPathSegment{PathSegment: segment, Kind: PathCandidateField, Field: access.Field}
+		related, relatedOK := access.Field.RelatedModel()
+		if hasMore && !relatedOK {
+			return state, ResolvedPathSegment{}, false
+		}
+		return resolverState{model: related}, resolved, true
+	}
+
+	if state.model != "" {
+		if access, ok := graph.QueryAccess(state.model, segment.Text); ok {
+			return stateFromField(access), ResolvedPathSegment{PathSegment: segment, Kind: PathCandidateField, Field: access.Field}, true
+		}
+		if state.relationField == nil {
+			return state, ResolvedPathSegment{}, false
+		}
+	}
+	field := state.field
+	if field == nil {
+		field = state.relationField
+	}
+	kind, transforms, ok := consumeFieldSuffix(field, state.transforms, segment.Text, mode, hasMore)
+	if !ok {
+		return state, ResolvedPathSegment{}, false
+	}
+	return resolverState{field: field, transforms: transforms}, ResolvedPathSegment{PathSegment: segment, Kind: kind, Field: field}, true
+}
+
+func stateFromField(access schema.FieldAccess) resolverState {
+	if access.Field.IsRelation() {
+		if related, ok := access.Field.RelatedModel(); ok {
+			return resolverState{model: related, relationField: access.Field}
+		}
+	}
+	return resolverState{field: access.Field}
+}
+
+func candidatesForState(graph *schema.Graph, mode PathMode, state resolverState) []PathCandidate {
+	candidates := make([]PathCandidate, 0, 32)
+	seen := make(map[string]struct{})
+	add := func(candidate PathCandidate) {
+		if candidate.Name == "" {
+			return
+		}
+		key := candidate.Name
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+	if mode == PathSelectRelated || mode == PathPrefetchRelated {
+		context := schema.RelationSelectRelated
+		if mode == PathPrefetchRelated {
+			context = schema.RelationPrefetchRelated
+		}
+		graph.VisitRelations(state.model, context, func(access schema.FieldAccess) bool {
+			rank := 0
+			if mode == PathPrefetchRelated {
+				direction, _ := access.Field.RelationDirection()
+				cardinality, _ := access.Field.RelationCardinality()
+				if direction == schema.RelationReverse || cardinality == schema.RelationManyToMany || cardinality == schema.RelationOneToMany {
+					rank = -1
+				}
+			}
+			add(PathCandidate{Name: access.Name, Kind: PathCandidateField, Field: access.Field, Rank: rank})
+			return true
+		})
+		return candidates
+	}
+	if state.model != "" {
+		graph.VisitQueryFields(state.model, func(access schema.FieldAccess) bool {
+			add(PathCandidate{Name: access.Name, Kind: PathCandidateField, Field: access.Field})
+			return true
+		})
+	}
+	field := state.field
+	if field == nil {
+		field = state.relationField
+	}
+	if field != nil {
+		for _, candidate := range fieldSuffixCandidates(field, state.transforms, mode) {
+			add(candidate)
+		}
+	}
+	return candidates
+}
+
+func fieldSuffixCandidates(field *schema.FieldRef, prefix []string, mode PathMode) []PathCandidate {
+	if mode == PathFields {
+		return nil
+	}
+	var candidates []PathCandidate
+	seen := make(map[string]struct{})
+	field.VisitLookupPaths(func(path schema.LookupPath) bool {
+		if len(path.Transforms) < len(prefix) || !equalStrings(path.Transforms[:len(prefix)], prefix) {
+			return true
+		}
+		if len(path.Transforms) > len(prefix) {
+			name := path.Transforms[len(prefix)]
+			if name != "*" {
+				if _, exists := seen[name]; !exists {
+					seen[name] = struct{}{}
+					candidates = append(candidates, PathCandidate{Name: name, Kind: PathCandidateTransform, Field: field, Rank: 1})
+				}
+			}
+			return true
+		}
+		if mode == PathLookup {
+			for _, lookup := range path.Lookups {
+				if field.IsRelation() && !relationLookup(lookup) {
+					continue
+				}
+				if _, exists := seen[lookup]; !exists {
+					seen[lookup] = struct{}{}
+					candidates = append(candidates, PathCandidate{Name: lookup, Kind: PathCandidateLookup, Field: field, Rank: 2})
+				}
+			}
+		}
+		return true
+	})
+	return candidates
+}
+
+func consumeFieldSuffix(field *schema.FieldRef, prefix []string, segment string, mode PathMode, hasMore bool) (PathCandidateKind, []string, bool) {
+	if field == nil || mode == PathFields {
+		return 0, nil, false
+	}
+	var wildcard bool
+	var lookup bool
+	var transform bool
+	nextPrefix := prefix
+	field.VisitLookupPaths(func(path schema.LookupPath) bool {
+		if len(path.Transforms) < len(prefix) || !equalStrings(path.Transforms[:len(prefix)], prefix) {
+			return true
+		}
+		if len(path.Transforms) > len(prefix) {
+			next := path.Transforms[len(prefix)]
+			if next == segment {
+				nextPrefix = append(append([]string(nil), prefix...), segment)
+				transform = true
+				wildcard = false
+				lookup = false
+				return false
+			}
+			if next == "*" {
+				wildcard = true
+			}
+			return true
+		}
+		if mode == PathLookup && !hasMore {
+			for _, candidate := range path.Lookups {
+				if candidate == segment && (!field.IsRelation() || relationLookup(candidate)) {
+					lookup = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	if transform {
+		return PathCandidateTransform, nextPrefix, true
+	}
+	if lookup {
+		return PathCandidateLookup, prefix, true
+	}
+	if wildcard {
+		return PathCandidateTransform, append(append([]string(nil), prefix...), "*"), true
+	}
+	return 0, nil, false
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func relationLookup(name string) bool {
+	switch name {
+	case "exact", "gt", "gte", "in", "isnull", "lt", "lte":
+		return true
+	default:
+		return false
+	}
+}

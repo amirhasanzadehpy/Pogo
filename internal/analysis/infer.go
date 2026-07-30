@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/amirhasanzadehpy/Pogo/internal/schema"
 )
@@ -22,6 +24,8 @@ const (
 type Value struct {
 	CanonicalLabel string
 	Kind           ValueKind
+	ManagerName    string
+	QuerySetClass  string
 }
 
 type ContextKind uint8
@@ -31,6 +35,8 @@ const (
 	ContextQueryKeyword
 	ContextModelMember
 	ContextInstanceMember
+	ContextMethodMember
+	ContextORMPath
 )
 
 type ByteRange struct {
@@ -43,6 +49,8 @@ type Context struct {
 	Value       Value
 	Identifier  string
 	Replacement ByteRange
+	Method      *schema.MethodRef
+	Path        *PathContext
 }
 
 var (
@@ -64,16 +72,13 @@ func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStat
 	if graph == nil || offset < 0 || offset > len(source) {
 		return Context{}, false
 	}
+	if context, ok := analyzePathContext(source, offset, graph, syntax); ok {
+		return context, true
+	}
 	replacement := identifierRange(source, offset)
 	identifier := string(source[replacement.Start:replacement.End])
 	if strings.Contains(identifier, "__") {
 		return Context{}, false
-	}
-	if receiver, argumentsStart, ok := queryReceiver(source, replacement.Start); ok && keywordNamePosition(source, argumentsStart, replacement.Start) {
-		value := inferExpression(strings.TrimSpace(string(source[receiver.Start:receiver.End])), source[:offset], graph, syntax, offset)
-		if value.Kind == ValueManager || value.Kind == ValueQuerySet {
-			return Context{Kind: ContextQueryKeyword, Value: value, Identifier: identifier, Replacement: replacement}, true
-		}
 	}
 	if replacement.Start == 0 || source[replacement.Start-1] != '.' {
 		return Context{}, false
@@ -88,6 +93,9 @@ func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStat
 		return Context{Kind: ContextModelMember, Value: value, Identifier: identifier, Replacement: replacement}, true
 	case ValueModelInstance:
 		return Context{Kind: ContextInstanceMember, Value: value, Identifier: identifier, Replacement: replacement}, true
+	case ValueManager, ValueQuerySet:
+		method, exists := methodForValue(graph, value, identifier)
+		return Context{Kind: ContextMethodMember, Value: value, Identifier: identifier, Replacement: replacement, Method: methodIf(exists, method)}, true
 	default:
 		return Context{}, false
 	}
@@ -263,14 +271,26 @@ func expressionBefore(source []byte, end int) ByteRange {
 
 func identifierRange(source []byte, offset int) ByteRange {
 	start := offset
-	for start > 0 && isIdentifierByte(source[start-1]) {
-		start--
+	for start > 0 {
+		rune_, size := utf8.DecodeLastRune(source[:start])
+		if rune_ == utf8.RuneError && size == 1 || !isIdentifierRune(rune_) {
+			break
+		}
+		start -= size
 	}
 	end := offset
-	for end < len(source) && isIdentifierByte(source[end]) {
-		end++
+	for end < len(source) {
+		rune_, size := utf8.DecodeRune(source[end:])
+		if rune_ == utf8.RuneError && size == 1 || !isIdentifierRune(rune_) {
+			break
+		}
+		end += size
 	}
 	return ByteRange{Start: start, End: end}
+}
+
+func isIdentifierRune(value rune) bool {
+	return value == '_' || unicode.IsLetter(value) || unicode.IsDigit(value) || unicode.IsMark(value)
 }
 
 func isIdentifierByte(value byte) bool {
@@ -459,18 +479,38 @@ func resolveExpression(expression string, imports map[string]string, values map[
 			if called {
 				return Value{}
 			}
-			if _, ok := graph.Manager(value.CanonicalLabel, name); !ok {
+			manager, ok := graph.Manager(value.CanonicalLabel, name)
+			if !ok {
 				return Value{}
 			}
 			value.Kind = ValueManager
+			value.ManagerName = name
+			if class, ok := manager.QuerySetClass(); ok {
+				value.QuerySetClass = class
+			}
 		case ValueManager, ValueQuerySet:
 			if !called {
 				return Value{}
 			}
+			if method, ok := methodForValue(graph, value, name); ok {
+				if !method.Chainable() {
+					return Value{}
+				}
+				if value.Kind == ValueManager {
+					value.ManagerName = ""
+				}
+				value.Kind = ValueQuerySet
+				break
+			}
 			switch name {
 			case "get", "first", "last", "create":
 				value.Kind = ValueModelInstance
-			case "all", "filter", "exclude", "order_by":
+				value.ManagerName = ""
+				value.QuerySetClass = ""
+			case "all", "filter", "exclude", "order_by", "values", "values_list", "only", "defer", "select_related", "prefetch_related":
+				if value.Kind == ValueManager {
+					value.ManagerName = ""
+				}
 				value.Kind = ValueQuerySet
 			default:
 				return Value{}
@@ -480,6 +520,70 @@ func resolveExpression(expression string, imports map[string]string, values map[
 		}
 	}
 	return value
+}
+
+func methodForValue(graph *schema.Graph, value Value, name string) (*schema.MethodRef, bool) {
+	if graph == nil {
+		return nil, false
+	}
+	if value.Kind == ValueManager {
+		manager, ok := graph.Manager(value.CanonicalLabel, value.ManagerName)
+		if !ok {
+			return nil, false
+		}
+		if method, ok := manager.Method(name); ok {
+			return method, true
+		}
+		return manager.QuerySetMethod(name)
+	}
+	if value.Kind == ValueQuerySet && value.QuerySetClass != "" {
+		return graph.QuerySetMethod(value.CanonicalLabel, value.QuerySetClass, name)
+	}
+	return nil, false
+}
+
+func ResolveMethod(graph *schema.Graph, value Value, name string) (*schema.MethodRef, bool) {
+	return methodForValue(graph, value, name)
+}
+
+func VisitMethods(graph *schema.Graph, value Value, visit func(*schema.MethodRef) bool) bool {
+	if graph == nil {
+		return false
+	}
+	seen := make(map[string]struct{})
+	visitOnce := func(method *schema.MethodRef) bool {
+		key := method.Name()
+		if _, exists := seen[key]; exists {
+			return true
+		}
+		seen[key] = struct{}{}
+		return visit(method)
+	}
+	if value.Kind == ValueManager {
+		manager, ok := graph.Manager(value.CanonicalLabel, value.ManagerName)
+		if !ok {
+			return false
+		}
+		if !manager.VisitMethods(visitOnce) {
+			return false
+		}
+		return manager.VisitQuerySetMethods(visitOnce)
+	}
+	if value.Kind == ValueQuerySet && value.QuerySetClass != "" {
+		querySet, ok := graph.QuerySet(value.CanonicalLabel, value.QuerySetClass)
+		if !ok {
+			return false
+		}
+		return querySet.VisitMethods(visitOnce)
+	}
+	return false
+}
+
+func methodIf(ok bool, method *schema.MethodRef) *schema.MethodRef {
+	if !ok {
+		return nil
+	}
+	return method
 }
 
 func resolveClass(reference string, imports map[string]string, graph *schema.Graph) (string, bool) {

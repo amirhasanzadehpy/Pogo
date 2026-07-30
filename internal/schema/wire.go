@@ -166,16 +166,31 @@ func validateManagerWire(payload json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if err := requireKeys(object, "name", "owner_class", "queryset_class", "default", "local", "auto_created", "source_range", "methods"); err != nil {
+	if err := requireKeys(object, "name", "owner_class", "queryset_class", "default", "local", "auto_created", "source_range", "methods", "queryset_methods"); err != nil {
 		return err
 	}
-	if err := requireKinds(object, map[string]jsonKind{"name": kindString, "owner_class": kindString, "queryset_class": kindNullableString, "default": kindBool, "local": kindBool, "auto_created": kindBool, "source_range": kindObject, "methods": kindArray}); err != nil {
+	if err := requireKinds(object, map[string]jsonKind{"name": kindString, "owner_class": kindString, "queryset_class": kindNullableString, "default": kindBool, "local": kindBool, "auto_created": kindBool, "source_range": kindObject, "methods": kindArray, "queryset_methods": kindArray}); err != nil {
 		return err
 	}
 	if err := validateSourceRangeWire(object["source_range"]); err != nil {
 		return err
 	}
-	return validateArray(object["methods"], validateMethodWire)
+	if err := validateArray(object["methods"], validateMethodWire); err != nil {
+		return err
+	}
+	return validateArray(object["queryset_methods"], func(value json.RawMessage) error {
+		binding, err := rawObject(value)
+		if err != nil {
+			return err
+		}
+		if err := requireKeys(binding, "method", "available_on_manager"); err != nil {
+			return err
+		}
+		if err := requireKinds(binding, map[string]jsonKind{"method": kindObject, "available_on_manager": kindBool}); err != nil {
+			return err
+		}
+		return validateMethodWire(binding["method"])
+	})
 }
 
 func validateMethodWire(payload json.RawMessage) error {

@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -194,8 +195,11 @@ func TestFeatureCapabilitiesAndDocumentNotifications(t *testing.T) {
 	if !ok || syncOptions.OpenClose == nil || !*syncOptions.OpenClose || syncOptions.Change == nil || *syncOptions.Change != protocol.TextDocumentSyncKindIncremental {
 		t.Fatalf("text synchronization capability = %#v", initialized.Capabilities.TextDocumentSync)
 	}
-	if initialized.Capabilities.CompletionProvider == nil || initialized.Capabilities.HoverProvider != true {
+	if initialized.Capabilities.CompletionProvider == nil || initialized.Capabilities.HoverProvider != true || initialized.Capabilities.SignatureHelpProvider == nil {
 		t.Fatalf("feature capabilities = %#v", initialized.Capabilities)
+	}
+	if got := initialized.Capabilities.CompletionProvider.TriggerCharacters; strings.Join(got, "") != "._\"'" {
+		t.Fatalf("completion triggers = %v", got)
 	}
 	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodInitialized, Params: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
@@ -221,6 +225,16 @@ func TestFeatureCapabilitiesAndDocumentNotifications(t *testing.T) {
 	result, validMethod, validParams, err = lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentHover, Params: hoverParams})
 	if _, ok := result.(*protocol.Hover); err != nil || !validMethod || !validParams || !ok {
 		t.Fatalf("hover = (%T, %v, %v, %v)", result, validMethod, validParams, err)
+	}
+	signatureOpen := json.RawMessage(`{"textDocument":{"uri":"file:///signature.py","languageId":"python","version":1,"text":"from myapp.models import Book\nBook.objects.active(limit=)"}}`)
+	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidOpen, Params: signatureOpen}); err != nil || !validMethod || !validParams {
+		t.Fatalf("signature didOpen = (%v, %v, %v)", validMethod, validParams, err)
+	}
+	signatureParams := json.RawMessage(`{"textDocument":{"uri":"file:///signature.py"},"position":{"line":1,"character":26}}`)
+	result, validMethod, validParams, err = lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentSignatureHelp, Params: signatureParams})
+	help, ok := result.(*protocol.SignatureHelp)
+	if err != nil || !validMethod || !validParams || !ok || help.ActiveParameter == nil || *help.ActiveParameter != 1 {
+		t.Fatalf("signature help = (%#v, %v, %v, %v)", result, validMethod, validParams, err)
 	}
 	closeParams := json.RawMessage(`{"textDocument":{"uri":"file:///feature.py"}}`)
 	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidClose, Params: closeParams}); err != nil {
