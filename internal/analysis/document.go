@@ -3,6 +3,7 @@ package analysis
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -34,6 +35,14 @@ type Snapshot struct {
 	Source  []byte
 	Parsed  bool
 	Syntax  []SyntaxStatement
+	Calls   []SyntaxCall
+}
+
+type SyntaxCall struct {
+	Range     ByteRange
+	Receiver  ByteRange
+	Arguments ByteRange
+	Method    string
 }
 
 type SyntaxStatement struct {
@@ -52,6 +61,7 @@ type document struct {
 	source  []byte
 	tree    *gotreesitter.Tree
 	syntax  []SyntaxStatement
+	calls   []SyntaxCall
 }
 
 type Store struct {
@@ -61,6 +71,7 @@ type Store struct {
 	statements *gotreesitter.Query
 	scopes     *gotreesitter.Query
 	guarded    *gotreesitter.Query
+	calls      *gotreesitter.Query
 }
 
 func NewStore() (*Store, error) {
@@ -94,7 +105,11 @@ func NewStore() (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compile Python guarded-block query: %w", err)
 	}
-	return &Store{documents: make(map[string]*document), language: language, statements: statements, scopes: scopes, guarded: guarded}, nil
+	calls, err := gotreesitter.NewQuery(`(call) @call`, language)
+	if err != nil {
+		return nil, fmt.Errorf("compile Python call query: %w", err)
+	}
+	return &Store{documents: make(map[string]*document), language: language, statements: statements, scopes: scopes, guarded: guarded, calls: calls}, nil
 }
 
 func (store *Store) Open(uri string, version int32, text string) error {
@@ -111,7 +126,7 @@ func (store *Store) Open(uri string, version int32, text string) error {
 	}
 	store.mu.Lock()
 	previous := store.documents[uri]
-	store.documents[uri] = &document{version: version, source: source, tree: tree, syntax: store.extractSyntax(tree, source)}
+	store.documents[uri] = &document{version: version, source: source, tree: tree, syntax: store.extractSyntax(tree, source), calls: store.extractCalls(tree, source)}
 	store.mu.Unlock()
 	if previous != nil && previous.tree != nil && previous.tree != tree {
 		previous.tree.Release()
@@ -202,6 +217,7 @@ func (store *Store) Change(uri string, version int32, changes []Change) error {
 	current.source = source
 	current.tree = tree
 	current.syntax = store.extractSyntax(tree, source)
+	current.calls = store.extractCalls(tree, source)
 	if oldTree != nil && oldTree != tree {
 		oldTree.Release()
 	}
@@ -243,7 +259,126 @@ func (store *Store) Snapshot(uri string) (Snapshot, bool) {
 		Source:  append([]byte(nil), current.source...),
 		Parsed:  current.tree != nil,
 		Syntax:  append([]SyntaxStatement(nil), current.syntax...),
+		Calls:   append([]SyntaxCall(nil), current.calls...),
 	}, true
+}
+
+func (store *Store) Snapshots() []Snapshot {
+	store.mu.RLock()
+	snapshots := make([]Snapshot, 0, len(store.documents))
+	for uri, current := range store.documents {
+		snapshots = append(snapshots, Snapshot{
+			URI: uri, Version: current.version, Source: append([]byte(nil), current.source...), Parsed: current.tree != nil,
+			Syntax: append([]SyntaxStatement(nil), current.syntax...), Calls: append([]SyntaxCall(nil), current.calls...),
+		})
+	}
+	store.mu.RUnlock()
+	sort.Slice(snapshots, func(left, right int) bool { return snapshots[left].URI < snapshots[right].URI })
+	return snapshots
+}
+
+func (store *Store) Save(uri string, text *string) error {
+	if text == nil {
+		if _, ok := store.Snapshot(uri); !ok {
+			return errors.New("document is not open")
+		}
+		return nil
+	}
+	store.mu.RLock()
+	current := store.documents[uri]
+	if current == nil {
+		store.mu.RUnlock()
+		return errors.New("document is not open")
+	}
+	version := current.version
+	store.mu.RUnlock()
+	return store.saveText(uri, version, *text)
+}
+
+func (store *Store) saveText(uri string, version int32, text string) error {
+	source := []byte(text)
+	if err := validateSource(source); err != nil {
+		return err
+	}
+	tree, err := store.parse(source, nil)
+	if err != nil {
+		return fmt.Errorf("parse saved document: %w", err)
+	}
+	store.mu.Lock()
+	current := store.documents[uri]
+	if current == nil || current.version != version {
+		store.mu.Unlock()
+		tree.Release()
+		return errors.New("saved document was changed concurrently")
+	}
+	oldTree := current.tree
+	current.source = source
+	current.tree = tree
+	current.syntax = store.extractSyntax(tree, source)
+	current.calls = store.extractCalls(tree, source)
+	store.mu.Unlock()
+	if oldTree != nil && oldTree != tree {
+		oldTree.Release()
+	}
+	return nil
+}
+
+func (store *Store) extractCalls(tree *gotreesitter.Tree, source []byte) []SyntaxCall {
+	if tree == nil {
+		return nil
+	}
+	var calls []SyntaxCall
+	for _, match := range store.calls.Execute(tree) {
+		for _, capture := range match.Captures {
+			node := capture.Node
+			if capture.Name != "call" || node == nil || node.IsError() || node.IsMissing() || node.HasError() {
+				continue
+			}
+			if callHasRecoveredStatement(node, store.language) {
+				continue
+			}
+			function := node.ChildByFieldName("function", store.language)
+			arguments := node.ChildByFieldName("arguments", store.language)
+			if function == nil || arguments == nil || function.Type(store.language) != "attribute" {
+				continue
+			}
+			receiver := function.ChildByFieldName("object", store.language)
+			method := function.ChildByFieldName("attribute", store.language)
+			if receiver == nil || method == nil {
+				continue
+			}
+			methodName := method.Text(source)
+			if _, _, supported := pathMethod(methodName); !supported {
+				continue
+			}
+			calls = append(calls, SyntaxCall{
+				Range:     ByteRange{Start: int(node.StartByte()), End: int(node.EndByte())},
+				Receiver:  ByteRange{Start: int(receiver.StartByte()), End: int(receiver.EndByte())},
+				Arguments: ByteRange{Start: int(arguments.StartByte()), End: int(arguments.EndByte())},
+				Method:    methodName,
+			})
+		}
+	}
+	sort.Slice(calls, func(left, right int) bool {
+		if calls[left].Range.Start != calls[right].Range.Start {
+			return calls[left].Range.Start < calls[right].Range.Start
+		}
+		return calls[left].Range.End < calls[right].Range.End
+	})
+	return calls
+}
+
+func callHasRecoveredStatement(node *gotreesitter.Node, language *gotreesitter.Language) bool {
+	for ancestor := node.Parent(); ancestor != nil; ancestor = ancestor.Parent() {
+		if ancestor.IsError() || ancestor.IsMissing() || ancestor.HasError() {
+			return true
+		}
+		typeName := ancestor.Type(language)
+		if strings.HasSuffix(typeName, "statement") || typeName == "expression_statement" {
+			return false
+		}
+	}
+	return false
 }
 
 func (store *Store) extractSyntax(tree *gotreesitter.Tree, source []byte) []SyntaxStatement {

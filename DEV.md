@@ -38,8 +38,9 @@ make clean
 `make test` is non-installing and requires `make fixture-env` to have already
 completed. It checks Go formatting, runs `go vet`, runs Go tests, and runs both
 the fixture and daemon standard-library Python suites. `make test-race` runs the
-Go suite with race detection. `make bench` measures parse-update, completion
-handler, end-to-end completion p50/p95, graph lookup, and server/worker RSS.
+Go suite with race detection. `make bench` measures parse-update, completion and
+diagnostic handlers, end-to-end completion/diagnostic p50/p95, schema refresh,
+graph lookup, and server/worker RSS.
 
 `make build` writes `build/django-orm-lsp` and `build/testclient`. Run a traced
 lifecycle scenario with logs isolated from protocol stdout:
@@ -85,6 +86,19 @@ related-loading paths, attached custom managers, and custom QuerySet chains.
 Signature help and method hover use cached signatures and docstrings without
 executing project methods. These hot handlers continue to use the last valid
 cache when the worker is unavailable and never issue worker requests.
+
+Completed static ORM paths are validated locally on open, change, and save.
+Diagnostics use stable `django-orm.*` codes, exact UTF-16 segment ranges, and the
+same context-aware resolver as completion and hover. Dynamic paths, unresolved
+receivers, and parser-recovered calls are left unreported. Closing a document
+clears its diagnostics.
+
+Saving a reported schema source or a Python file below an installed app root
+starts a 300 ms trailing-edge debounce. A burst causes one fresh Django worker
+session and one atomic cache-generation swap after strict schema validation.
+Failed refreshes retain the previous immutable graph; successful generations
+revalidate every still-open document. Ordinary Python saves outside those roots
+do not restart the worker.
 
 Deep paths use Django's context-specific names: query names in filters and
 projections, reverse accessors in `prefetch_related`, and only single-valued

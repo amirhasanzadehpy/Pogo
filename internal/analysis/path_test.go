@@ -160,6 +160,14 @@ func pathSegments(path string) []PathSegment {
 	return parts
 }
 
+func TestResolvePathSegmentRejectsNonterminalLookup(t *testing.T) {
+	graph := pathTestGraph(t)
+	segments := []PathSegment{{Text: "title"}, {Text: "icontains"}, {Text: "exact"}}
+	if _, ok := ResolvePathSegment(graph, "myapp.Book", PathLookup, segments, 1); ok {
+		t.Fatal("ResolvePathSegment() accepted a nonterminal lookup")
+	}
+}
+
 func pathTestGraph(t *testing.T) *schema.Graph {
 	t.Helper()
 	forward, reverse := "forward", "reverse"
@@ -176,9 +184,15 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	hiddenMethod := schema.Method{Name: "hidden", OwnerClass: querySetClass, Signature: &hiddenSignature, Chainable: true, AssumedChainable: true, SourceRange: testSourceRange()}
 	featuredMethod := schema.Method{Name: "featured", OwnerClass: "myapp.models.BookManager", Signature: &featuredSignature, Chainable: true, SourceRange: testSourceRange()}
 	filterMethod := schema.Method{Name: "filter", OwnerClass: "myapp.models.BookManager", Signature: &hiddenSignature, SourceRange: testSourceRange()}
+	authorName := testField("myapp.Author", "name", "django.db.models.fields.CharField")
+	authorName.LookupPaths = []schema.LookupPath{{Lookups: []string{"exact", "icontains"}}}
+	authorPrimaryKey := testField("myapp.Author", "id", "django.db.models.fields.BigAutoField")
+	authorPrimaryKey.PrimaryKey = true
+	authorPrimaryKey.EffectivePrimaryKey = true
 	models := map[string]schema.Model{
 		"Author": testModel("Author", map[string]schema.Field{
-			"name":    testField("myapp.Author", "name", "django.db.models.fields.CharField"),
+			"id":      authorPrimaryKey,
+			"name":    authorName,
 			"café":    testField("myapp.Author", "café", "django.db.models.fields.CharField"),
 			"book":    relationField("myapp.Book", "book", bookLabel, reverse, oneToMany, &book, &books),
 			"profile": relationField("myapp.Profile", "profile", profileLabel, reverse, oneToOne, &profile, &profile),
@@ -194,6 +208,7 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	}
 	title := testField("myapp.Book", "title", "django.db.models.fields.CharField")
 	title.LookupPaths = []schema.LookupPath{{Lookups: []string{"exact", "icontains"}}}
+	title.UnsupportedLookups = []string{"contains"}
 	published := testField("myapp.Book", "published_at", "django.db.models.fields.DateTimeField")
 	published.LookupPaths = []schema.LookupPath{
 		{Lookups: []string{"exact", "gte"}},
@@ -209,8 +224,11 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	author.Attname = &authorID
 	author.LookupPaths = []schema.LookupPath{{Lookups: []string{"exact", "in", "isnull"}}}
 	storeRelation := relationField("myapp.Store", "store", storeLabel, reverse, manyToMany, &store, &storeSet)
+	bookPrimaryKey := testField("myapp.Book", "id", "django.db.models.fields.BigAutoField")
+	bookPrimaryKey.PrimaryKey = true
+	bookPrimaryKey.EffectivePrimaryKey = true
 	bookModel := testModel("Book", map[string]schema.Field{
-		"title": title, "published_at": published, "metadata": metadata, "author": author, "store": storeRelation,
+		"id": bookPrimaryKey, "title": title, "published_at": published, "metadata": metadata, "author": author, "store": storeRelation,
 	})
 	bookModel.Managers = []schema.Manager{
 		{Name: "objects", OwnerClass: "django.db.models.ManagerFromBookQuerySet", QuerySetClass: &querySetClass, SourceRange: testSourceRange(), Methods: []schema.Method{featuredMethod}, QuerySetMethods: []schema.BoundQuerySetMethod{{Method: activeMethod, AvailableOnManager: true}, {Method: hiddenMethod}}},

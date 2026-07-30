@@ -269,7 +269,11 @@ func TestCompletionAndHoverDoNotRequestStoppedWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	failure := make(chan error, 1)
-	manager.Start(ctx, func(err error) { failure <- err })
+	manager.Start(ctx, func(_ uint64, err error) {
+		if err != nil {
+			failure <- err
+		}
+	})
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	for {
@@ -412,6 +416,67 @@ func BenchmarkCompletionHandler(b *testing.B) {
 		if _, err := features.Completion(uri, analysis.Position{Line: 1, Character: 30}); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkDiagnosticLatency(b *testing.B) {
+	features := testFeatures(b)
+	defer features.Close()
+	features.SetNotifier(func(string, any) {})
+	uri := "file:///diagnostic-benchmark.py"
+	if err := features.documents.Open(uri, 1, "from myapp.models import Book\nBook.objects.filter(titel=1)\n"); err != nil {
+		b.Fatal(err)
+	}
+	version := int32(1)
+	totals := make([]time.Duration, b.N)
+	parseTotal := time.Duration(0)
+	diagnosticTotal := time.Duration(0)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		started := time.Now()
+		version++
+		text := "title"
+		if index%2 == 1 {
+			text = "titel"
+		}
+		parseStarted := time.Now()
+		if err := features.documents.Change(uri, version, []analysis.Change{{
+			Range: &analysis.Range{Start: analysis.Position{Line: 1, Character: 20}, End: analysis.Position{Line: 1, Character: 25}},
+			Text:  text,
+		}}); err != nil {
+			b.Fatal(err)
+		}
+		parseTotal += time.Since(parseStarted)
+		diagnosticStarted := time.Now()
+		features.publishURI(uri)
+		diagnosticTotal += time.Since(diagnosticStarted)
+		totals[index] = time.Since(started)
+	}
+	b.StopTimer()
+	sort.Slice(totals, func(left, right int) bool { return totals[left] < totals[right] })
+	b.ReportMetric(float64(parseTotal.Nanoseconds())/float64(b.N), "parse-ns/op")
+	b.ReportMetric(float64(diagnosticTotal.Nanoseconds())/float64(b.N), "diagnostic-ns/op")
+	b.ReportMetric(float64(percentile(totals, 50).Nanoseconds())/1000, "p50-us")
+	p95 := percentile(totals, 95)
+	b.ReportMetric(float64(p95.Nanoseconds())/1000, "p95-us")
+	if p95 >= 10*time.Millisecond {
+		b.Fatalf("loaded-cache diagnostic p95 = %s, want < 10ms", p95)
+	}
+}
+
+func BenchmarkDiagnosticHandler(b *testing.B) {
+	features := testFeatures(b)
+	defer features.Close()
+	features.SetNotifier(func(string, any) {})
+	uri := "file:///diagnostic-handler-benchmark.py"
+	if err := features.documents.Open(uri, 1, "from myapp.models import Book\nBook.objects.filter(author__missing=1)\n"); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		features.publishURI(uri)
 	}
 }
 

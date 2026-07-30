@@ -669,6 +669,33 @@ func BenchmarkGraphLookup(b *testing.B) {
 	}
 }
 
+func TestEffectivePrimaryKeyOwnsPKAlias(t *testing.T) {
+	snapshot := syntheticSnapshot(2)
+	parent := "app.Model1"
+	direction, cardinality := "forward", "many-to-one"
+	child := snapshot.Apps["app"].Models["Model0"]
+	child.Fields = map[string]Field{
+		"id": {
+			Type: "django.db.models.BigAutoField", InternalType: "BigAutoField", Name: "id", SourceModel: "app.Model1",
+			PrimaryKey: true, EffectivePrimaryKey: false, SourceRange: testRange(1),
+		},
+		"publication_ptr": {
+			Type: "django.db.models.OneToOneField", InternalType: "OneToOneField", Name: "publication_ptr", SourceModel: "app.Model0",
+			PrimaryKey: true, EffectivePrimaryKey: true, IsRelation: true, RelatedModel: &parent,
+			RelationDirection: &direction, RelationCardinality: &cardinality, SourceRange: testRange(1),
+		},
+	}
+	snapshot.Apps["app"].Models["Model0"] = child
+	graph, err := Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, ok := graph.QueryAccess("app.Model0", "pk")
+	if !ok || access.Field.Name() != "publication_ptr" || !access.Field.IsRelation() {
+		t.Fatalf("pk access = %#v, %v", access, ok)
+	}
+}
+
 func syntheticSnapshot(count int) Snapshot {
 	models := make(map[string]Model, count)
 	for index := 0; index < count; index++ {

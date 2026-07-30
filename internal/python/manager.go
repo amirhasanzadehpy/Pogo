@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,7 +57,21 @@ type Manager struct {
 	run              func(context.Context, func(uint64, int)) (bool, error)
 	workerScript     []byte
 	requestCount     atomic.Uint64
+	sessionCancel    context.CancelFunc
+	refreshTimer     *time.Timer
+	refreshWake      chan struct{}
+	refreshEpoch     uint64
+	releasedEpoch    uint64
+	activeEpoch      uint64
+	refreshPending   bool
+	refreshDeadline  time.Time
+	refreshDelay     time.Duration
+	refreshStarted   time.Time
 }
+
+const schemaRefreshDebounce = 300 * time.Millisecond
+
+var errWorkerCleanup = errors.New("worker cleanup failed")
 
 func (manager *Manager) RequestCount() uint64 {
 	if manager == nil {
@@ -109,7 +124,7 @@ func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, er
 	return manager, nil
 }
 
-func (manager *Manager) Start(parent context.Context, notify func(error)) {
+func (manager *Manager) Start(parent context.Context, notify func(uint64, error)) {
 	manager.mu.Lock()
 	if manager.cancel != nil {
 		manager.mu.Unlock()
@@ -120,9 +135,115 @@ func (manager *Manager) Start(parent context.Context, notify func(error)) {
 	manager.cancel = cancel
 	manager.done = done
 	manager.lastErr = nil
+	manager.refreshPending = false
+	manager.releasedEpoch = manager.refreshEpoch
+	manager.refreshWake = make(chan struct{}, 1)
+	if manager.refreshDelay <= 0 {
+		manager.refreshDelay = schemaRefreshDebounce
+	}
 	manager.mu.Unlock()
 
 	go manager.loop(ctx, done, notify)
+}
+
+func (manager *Manager) DidSave(path string) {
+	if !manager.schemaAffectingPath(path) {
+		return
+	}
+	manager.mu.Lock()
+	if manager.cancel == nil {
+		manager.mu.Unlock()
+		return
+	}
+	manager.refreshEpoch++
+	epoch := manager.refreshEpoch
+	manager.refreshPending = false
+	manager.refreshDeadline = time.Now().Add(manager.refreshDelay)
+	if manager.refreshTimer != nil {
+		manager.refreshTimer.Stop()
+	}
+	manager.refreshTimer = time.AfterFunc(manager.refreshDelay, func() {
+		manager.mu.Lock()
+		if manager.cancel == nil || manager.refreshEpoch != epoch || time.Now().Before(manager.refreshDeadline) {
+			manager.mu.Unlock()
+			return
+		}
+		manager.refreshPending = true
+		manager.releasedEpoch = epoch
+		manager.refreshStarted = time.Now()
+		cancel := manager.sessionCancel
+		wake := manager.refreshWake
+		manager.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})
+	manager.mu.Unlock()
+}
+
+func (manager *Manager) schemaAffectingPath(path string) bool {
+	if strings.ToLower(filepath.Ext(path)) != ".py" {
+		return false
+	}
+	graph, _ := manager.cache.Load()
+	if graph != nil && graph.SchemaAffectingPath(path) {
+		return true
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absolute = canonicalPath(absolute)
+	if graph == nil && pathWithin(manager.config.ProjectRoot, absolute) {
+		return true
+	}
+	if manager.config.SettingsModule != "" {
+		settingsPath := filepath.Join(manager.config.ProjectRoot, filepath.FromSlash(strings.ReplaceAll(manager.config.SettingsModule, ".", "/")))
+		if sameFilePath(absolute, settingsPath+".py") || sameFilePath(absolute, filepath.Join(settingsPath, "__init__.py")) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathWithin(root, candidate string) bool {
+	root = canonicalPath(root)
+	candidate = canonicalPath(candidate)
+	relative, err := filepath.Rel(root, candidate)
+	return err == nil && relative != ".." && !filepath.IsAbs(relative) && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func sameFilePath(left, right string) bool {
+	left, right = canonicalPath(left), canonicalPath(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func canonicalPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	ancestor := path
+	var suffix []string
+	for {
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return path
+		}
+		suffix = append([]string{filepath.Base(ancestor)}, suffix...)
+		ancestor = parent
+		if resolved, err := filepath.EvalSymlinks(ancestor); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Clean(filepath.Join(parts...))
+		}
+	}
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
@@ -135,6 +256,13 @@ func (manager *Manager) Stop(ctx context.Context) error {
 		return lastErr
 	}
 	if cancel != nil {
+		manager.mu.Lock()
+		manager.refreshEpoch++
+		if manager.refreshTimer != nil {
+			manager.refreshTimer.Stop()
+			manager.refreshTimer = nil
+		}
+		manager.mu.Unlock()
 		cancel()
 	}
 	select {
@@ -148,7 +276,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-func (manager *Manager) loop(ctx context.Context, done chan struct{}, notify func(error)) {
+func (manager *Manager) loop(ctx context.Context, done chan struct{}, notify func(uint64, error)) {
 	var finalErr error
 	defer func() {
 		manager.mu.Lock()
@@ -164,14 +292,81 @@ func (manager *Manager) loop(ctx context.Context, done chan struct{}, notify fun
 	failures := 0
 	notified := false
 	for {
-		loaded, err := manager.run(ctx, func(generation uint64, modelCount int) {
+		manager.mu.Lock()
+		requestedEpoch := manager.refreshEpoch
+		releasedEpoch := manager.releasedEpoch
+		wake := manager.refreshWake
+		manager.mu.Unlock()
+		if requestedEpoch > releasedEpoch {
+			if !manager.waitForRefresh(ctx, wake, releasedEpoch) {
+				return
+			}
+			continue
+		}
+		sessionContext, cancelSession := context.WithCancel(ctx)
+		manager.mu.Lock()
+		manager.sessionCancel = cancelSession
+		attemptEpoch := manager.refreshEpoch
+		manager.activeEpoch = attemptEpoch
+		manager.mu.Unlock()
+		loaded, err := manager.run(sessionContext, func(generation uint64, modelCount int) {
 			manager.info("schema cache generation=%d models=%d", generation, modelCount)
+			manager.mu.Lock()
+			started := manager.refreshStarted
+			manager.refreshStarted = time.Time{}
+			manager.mu.Unlock()
+			if !started.IsZero() {
+				manager.info("schema refresh duration=%s", time.Since(started))
+			}
+			notified = false
+			if notify != nil {
+				notify(generation, nil)
+			}
 		})
+		cancelSession()
+		manager.mu.Lock()
+		manager.sessionCancel = nil
+		refresh := manager.refreshPending
+		currentEpoch := manager.refreshEpoch
+		if refresh {
+			manager.refreshPending = false
+		}
+		wake = manager.refreshWake
+		manager.mu.Unlock()
 		if ctx.Err() != nil {
 			finalErr = err
 			return
 		}
+		superseded := attemptEpoch != currentEpoch
+		if superseded && !refresh {
+			if !manager.waitForRefresh(ctx, wake, attemptEpoch) {
+				finalErr = err
+				return
+			}
+			refresh = true
+		}
+		if refresh {
+			if errors.Is(err, errWorkerCleanup) {
+				manager.warning("schema refresh cleanup failed; retaining generation: %s", err)
+				if !notified && notify != nil {
+					notified = true
+					notify(0, errors.New(outageMessage))
+				}
+				finalErr = err
+				return
+			}
+			failures = 0
+			continue
+		}
 		if err == nil {
+			return
+		}
+		if errors.Is(err, errWorkerCleanup) {
+			manager.warning("worker cleanup failed; refusing to start another process: %s", err)
+			if !notified && notify != nil {
+				notify(0, errors.New(outageMessage))
+			}
+			finalErr = err
 			return
 		}
 		if loaded {
@@ -179,29 +374,78 @@ func (manager *Manager) loop(ctx context.Context, done chan struct{}, notify fun
 			notified = false
 		}
 		failures++
-		manager.warning("worker session failed: %s", err)
+		var retainedGeneration uint64
+		if manager.cache != nil {
+			_, retainedGeneration = manager.cache.Load()
+		}
+		manager.warning("schema_refresh_failed retained_generation=%d error=%s", retainedGeneration, err)
 		if !notified {
 			notified = true
 			if notify != nil {
-				notify(errors.New(outageMessage))
+				notify(0, errors.New(outageMessage))
 			}
 		}
 		if failures > manager.config.RestartLimit {
 			manager.error("worker restart limit reached")
-			return
+			if !manager.waitForRefresh(ctx, wake, currentEpoch) {
+				finalErr = err
+				return
+			}
+			failures = 0
+			continue
 		}
 		delay := manager.config.BackoffBase << (failures - 1)
 		if delay > 2*time.Second {
 			delay = 2 * time.Second
 		}
-		timer := time.NewTimer(delay)
+		refreshed, stopped := manager.waitForBackoff(ctx, wake, attemptEpoch, delay)
+		if stopped {
+			return
+		}
+		if refreshed {
+			failures = 0
+		}
+	}
+}
+
+func (manager *Manager) waitForRefresh(ctx context.Context, wake <-chan struct{}, afterEpoch uint64) bool {
+	for {
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
+			return false
+		case <-wake:
+			manager.mu.Lock()
+			valid := manager.refreshEpoch > afterEpoch && manager.releasedEpoch == manager.refreshEpoch && manager.refreshPending && !time.Now().Before(manager.refreshDeadline)
+			if valid {
+				manager.refreshPending = false
 			}
-			return
+			manager.mu.Unlock()
+			if valid {
+				return true
+			}
+		}
+	}
+}
+
+func (manager *Manager) waitForBackoff(ctx context.Context, wake <-chan struct{}, afterEpoch uint64, delay time.Duration) (bool, bool) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, true
 		case <-timer.C:
+			return false, false
+		case <-wake:
+			manager.mu.Lock()
+			valid := manager.refreshEpoch > afterEpoch && manager.releasedEpoch == manager.refreshEpoch && manager.refreshPending && !time.Now().Before(manager.refreshDeadline)
+			if valid {
+				manager.refreshPending = false
+			}
+			manager.mu.Unlock()
+			if valid {
+				return true, false
+			}
 		}
 	}
 }
@@ -218,8 +462,8 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	manager.setRuntimeDirectory(runtimeDirectory)
 	defer func() {
 		manager.setRuntimeDirectory("")
-		if err := os.RemoveAll(runtimeDirectory); err != nil && runErr == nil {
-			runErr = fmt.Errorf("remove worker runtime: %w", err)
+		if err := os.RemoveAll(runtimeDirectory); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("%w: remove worker runtime: %v", errWorkerCleanup, err))
 		}
 	}()
 
@@ -231,7 +475,11 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	if err != nil {
 		return false, fmt.Errorf("create worker endpoint: %w", err)
 	}
-	defer func() { _ = endpoint.Close() }()
+	defer func() {
+		if err := endpoint.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			runErr = errors.Join(runErr, fmt.Errorf("%w: close worker endpoint: %v", errWorkerCleanup, err))
+		}
+	}()
 
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -269,13 +517,13 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 		}
 		if command.Process != nil {
 			if err := killProcess(command.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
-				runErr = errors.Join(runErr, fmt.Errorf("kill Python worker: %w", err))
+				runErr = errors.Join(runErr, fmt.Errorf("%w: kill Python worker: %v", errWorkerCleanup, err))
 			}
 		}
 		select {
 		case <-waitDone:
 		case <-time.After(manager.config.ShutdownTimeout):
-			runErr = errors.Join(runErr, errors.New("timed out reaping Python worker"))
+			runErr = errors.Join(runErr, fmt.Errorf("%w: timed out reaping Python worker", errWorkerCleanup))
 		}
 	}()
 
@@ -307,7 +555,10 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	if err != nil {
 		return false, fmt.Errorf("validate Django schema: %w", err)
 	}
-	generation := manager.cache.Replace(graph)
+	generation, accepted := manager.publishGraph(ctx, graph)
+	if !accepted {
+		return false, nil
+	}
 	wasLoaded = true
 	loaded(generation, graph.ModelCount())
 	loadedAt := time.Now()
@@ -331,18 +582,27 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 		case <-time.After(manager.config.ShutdownTimeout):
 			if command.Process != nil {
 				if err := killProcess(command.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
-					return true, fmt.Errorf("kill Python worker: %w", err)
+					return true, fmt.Errorf("%w: kill Python worker: %v", errWorkerCleanup, err)
 				}
 			}
 			select {
 			case <-waitDone:
 				processExited = true
 			case <-time.After(manager.config.ShutdownTimeout):
-				return true, errors.New("timed out reaping Python worker after kill")
+				return true, fmt.Errorf("%w: timed out reaping Python worker after kill", errWorkerCleanup)
 			}
 		}
 		return true, nil
 	}
+}
+
+func (manager *Manager) publishGraph(ctx context.Context, graph *schema.Graph) (uint64, bool) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if ctx.Err() != nil || manager.refreshPending || manager.activeEpoch != manager.refreshEpoch || manager.activeEpoch != manager.releasedEpoch {
+		return 0, false
+	}
+	return manager.cache.Replace(graph), true
 }
 
 func (manager *Manager) authenticate(parent context.Context, endpoint endpoint, token string) (net.Conn, error) {

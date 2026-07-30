@@ -20,7 +20,7 @@
         "id": 1,
         "result": {
           "capabilities": {
-            "textDocumentSync": {"openClose": true, "change": 2},
+            "textDocumentSync": {"openClose": true, "change": 2, "save": {"includeText": true}},
             "completionProvider": {"triggerCharacters": [".", "_", "\"", "'"]},
             "hoverProvider": true,
             "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]}
@@ -39,6 +39,22 @@
         "params": {}
       }
     },
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
     {"sample_rss": true},
     {"sample_rss": true},
     {"sample_rss": true},

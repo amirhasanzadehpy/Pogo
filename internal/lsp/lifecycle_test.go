@@ -3,9 +3,12 @@ package lsp
 import (
 	"context"
 	"encoding/json"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -31,7 +34,6 @@ func TestLifecycleTransitions(t *testing.T) {
 	if initializeResult.ServerInfo == nil || initializeResult.ServerInfo.Name != ServerName {
 		t.Fatalf("server info = %#v", initializeResult.ServerInfo)
 	}
-
 	if _, _, _, err := lifecycle.Handle(initializeContext(t)); err == nil {
 		t.Fatal("duplicate initialize error = nil")
 	}
@@ -120,7 +122,7 @@ func TestWorkerFailureNotifiesAndExitStopsWorker(t *testing.T) {
 		if message.Type != protocol.MessageTypeWarning || message.Message == "" {
 			t.Fatalf("warning notification = %#v", message)
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("worker failure did not send warning notification")
 	}
 	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodExit}); err != nil {
@@ -136,16 +138,25 @@ type fakeWorker struct {
 	starts int
 	stops  int
 	fail   bool
+	saves  []string
+	notify func(uint64, error)
 }
 
-func (worker *fakeWorker) Start(_ context.Context, notify func(error)) {
+func (worker *fakeWorker) Start(_ context.Context, notify func(uint64, error)) {
 	worker.mu.Lock()
 	worker.starts++
 	fail := worker.fail
+	worker.notify = notify
 	worker.mu.Unlock()
 	if fail && notify != nil {
-		notify(context.DeadlineExceeded)
+		notify(0, context.DeadlineExceeded)
 	}
+}
+
+func (worker *fakeWorker) DidSave(path string) {
+	worker.mu.Lock()
+	worker.saves = append(worker.saves, path)
+	worker.mu.Unlock()
 }
 
 func (worker *fakeWorker) Stop(context.Context) error {
@@ -159,6 +170,12 @@ func (worker *fakeWorker) counts() (int, int) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	return worker.starts, worker.stops
+}
+
+func (worker *fakeWorker) savedPaths() []string {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	return append([]string(nil), worker.saves...)
 }
 
 func TestExitWithoutShutdown(t *testing.T) {
@@ -194,6 +211,10 @@ func TestFeatureCapabilitiesAndDocumentNotifications(t *testing.T) {
 	syncOptions, ok := initialized.Capabilities.TextDocumentSync.(protocol.TextDocumentSyncOptions)
 	if !ok || syncOptions.OpenClose == nil || !*syncOptions.OpenClose || syncOptions.Change == nil || *syncOptions.Change != protocol.TextDocumentSyncKindIncremental {
 		t.Fatalf("text synchronization capability = %#v", initialized.Capabilities.TextDocumentSync)
+	}
+	saveOptions, ok := syncOptions.Save.(protocol.SaveOptions)
+	if !ok || saveOptions.IncludeText == nil || !*saveOptions.IncludeText {
+		t.Fatalf("save capability = %#v", syncOptions.Save)
 	}
 	if initialized.Capabilities.CompletionProvider == nil || initialized.Capabilities.HoverProvider != true || initialized.Capabilities.SignatureHelpProvider == nil {
 		t.Fatalf("feature capabilities = %#v", initialized.Capabilities)
@@ -242,6 +263,54 @@ func TestFeatureCapabilitiesAndDocumentNotifications(t *testing.T) {
 	}
 	if _, ok := features.documents.Snapshot("file:///feature.py"); ok {
 		t.Fatal("didClose did not remove document")
+	}
+}
+
+func TestDidSaveReparsesPublishesAndSchedulesWorker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	features := testFeatures(t)
+	worker := &fakeWorker{}
+	lifecycle := NewLifecycleContextWithFactory(ctx, cancel, nil, func(*protocol.InitializeParams) (Worker, error) {
+		return worker, nil
+	}, features)
+	if _, _, _, err := lifecycle.Handle(initializeContext(t)); err != nil {
+		t.Fatal(err)
+	}
+	var publications []protocol.PublishDiagnosticsParams
+	notify := func(method string, params any) {
+		if method == string(protocol.ServerTextDocumentPublishDiagnostics) {
+			publications = append(publications, params.(protocol.PublishDiagnosticsParams))
+		}
+	}
+	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodInitialized, Params: json.RawMessage(`{}`), Notify: notify}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "queries.py")
+	uri := (&url.URL{Scheme: "file", Path: path}).String()
+	invalid := "from myapp.models import Book\nBook.objects.filter(missing=1)\n"
+	openParams, _ := json.Marshal(protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{
+		URI: protocol.DocumentUri(uri), LanguageID: "python", Version: 1, Text: invalid,
+	}})
+	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidOpen, Params: openParams, Notify: notify}); err != nil {
+		t.Fatal(err)
+	}
+	valid := strings.Replace(invalid, "missing", "title", 1)
+	saveParams, _ := json.Marshal(protocol.DidSaveTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: protocol.DocumentUri(uri)}, Text: &valid,
+	})
+	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidSave, Params: saveParams, Notify: notify}); err != nil || !validMethod || !validParams {
+		t.Fatalf("didSave = (%v, %v, %v)", validMethod, validParams, err)
+	}
+	if len(publications) != 2 || len(publications[0].Diagnostics) != 1 || publications[1].Diagnostics == nil || len(publications[1].Diagnostics) != 0 {
+		t.Fatalf("diagnostic publications = %#v", publications)
+	}
+	paths := worker.savedPaths()
+	if len(paths) != 1 || paths[0] != filepath.Clean(path) {
+		t.Fatalf("worker saves = %v, want %q", paths, path)
+	}
+	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodShutdown}); err != nil {
+		t.Fatal(err)
 	}
 }
 

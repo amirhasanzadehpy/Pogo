@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/amirhasanzadehpy/Pogo/internal/analysis"
 	"github.com/amirhasanzadehpy/Pogo/internal/schema"
@@ -12,12 +13,22 @@ import (
 )
 
 type Features struct {
-	documents *analysis.Store
-	cache     *schema.Cache
+	documents    *analysis.Store
+	cache        *schema.Cache
+	notifyMu     sync.RWMutex
+	diagnosticMu sync.Mutex
+	notify       glsp.NotifyFunc
+	closed       bool
 }
 
 func (features *Features) Close() {
 	if features != nil {
+		features.diagnosticMu.Lock()
+		features.notifyMu.Lock()
+		features.closed = true
+		features.notify = nil
+		features.notifyMu.Unlock()
+		features.diagnosticMu.Unlock()
 		features.documents.CloseAll()
 	}
 }
@@ -25,8 +36,9 @@ func (features *Features) Close() {
 func (features *Features) Capabilities() protocol.ServerCapabilities {
 	openClose := true
 	change := protocol.TextDocumentSyncKindIncremental
+	includeText := true
 	return protocol.ServerCapabilities{
-		TextDocumentSync: protocol.TextDocumentSyncOptions{OpenClose: &openClose, Change: &change},
+		TextDocumentSync: protocol.TextDocumentSyncOptions{OpenClose: &openClose, Change: &change, Save: protocol.SaveOptions{IncludeText: &includeText}},
 		CompletionProvider: &protocol.CompletionOptions{
 			TriggerCharacters: []string{".", "_", "\"", "'"},
 		},
@@ -49,14 +61,19 @@ func NewFeatures(cache *schema.Cache) (*Features, error) {
 	return &Features{documents: documents, cache: cache}, nil
 }
 
-func (features *Features) didOpen(_ *glsp.Context, params *protocol.DidOpenTextDocumentParams) error {
+func (features *Features) didOpen(ctx *glsp.Context, params *protocol.DidOpenTextDocumentParams) error {
 	if features == nil || params == nil {
 		return nil
 	}
-	return features.documents.Open(string(params.TextDocument.URI), int32(params.TextDocument.Version), params.TextDocument.Text)
+	features.setNotifier(ctx)
+	if err := features.documents.Open(string(params.TextDocument.URI), int32(params.TextDocument.Version), params.TextDocument.Text); err != nil {
+		return err
+	}
+	features.publishURI(string(params.TextDocument.URI))
+	return nil
 }
 
-func (features *Features) didChange(_ *glsp.Context, params *protocol.DidChangeTextDocumentParams) error {
+func (features *Features) didChange(ctx *glsp.Context, params *protocol.DidChangeTextDocumentParams) error {
 	if features == nil || params == nil {
 		return nil
 	}
@@ -80,12 +97,19 @@ func (features *Features) didChange(_ *glsp.Context, params *protocol.DidChangeT
 			return fmt.Errorf("unsupported content change type %T", raw)
 		}
 	}
-	return features.documents.Change(string(params.TextDocument.URI), int32(params.TextDocument.Version), changes)
+	features.setNotifier(ctx)
+	if err := features.documents.Change(string(params.TextDocument.URI), int32(params.TextDocument.Version), changes); err != nil {
+		return err
+	}
+	features.publishURI(string(params.TextDocument.URI))
+	return nil
 }
 
-func (features *Features) didClose(_ *glsp.Context, params *protocol.DidCloseTextDocumentParams) error {
+func (features *Features) didClose(ctx *glsp.Context, params *protocol.DidCloseTextDocumentParams) error {
 	if features != nil && params != nil {
+		features.setNotifier(ctx)
 		features.documents.Close(string(params.TextDocument.URI))
+		features.clearDiagnostics(string(params.TextDocument.URI))
 	}
 	return nil
 }

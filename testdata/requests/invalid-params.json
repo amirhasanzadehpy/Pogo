@@ -36,7 +36,7 @@
         "id": 2,
         "result": {
           "capabilities": {
-            "textDocumentSync": {"openClose": true, "change": 2},
+            "textDocumentSync": {"openClose": true, "change": 2, "save": {"includeText": true}},
             "completionProvider": {"triggerCharacters": [".", "_", "\"", "'"]},
             "hoverProvider": true,
             "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]}

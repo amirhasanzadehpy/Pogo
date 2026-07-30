@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -142,7 +144,7 @@ func Build(snapshot Snapshot) (*Graph, error) {
 		module:    make(map[string][]*modelIndex),
 	}
 	for appKey, app := range snapshot.Apps {
-		if appKey == "" || app.Label != appKey || app.ImportName == "" || app.RootPath == "" {
+		if appKey == "" || app.Label != appKey || app.ImportName == "" || app.RootPath == "" || !filepath.IsAbs(app.RootPath) {
 			return nil, fmt.Errorf("invalid app metadata for key %q", appKey)
 		}
 		for modelName, model := range app.Models {
@@ -163,6 +165,11 @@ func Build(snapshot Snapshot) (*Graph, error) {
 			graph.canonical[model.CanonicalLabel] = index
 			graph.classPath[classPath] = index
 			graph.module[model.Module] = append(graph.module[model.Module], index)
+		}
+	}
+	for _, source := range snapshot.SchemaSources {
+		if source == "" || !filepath.IsAbs(source) {
+			return nil, fmt.Errorf("invalid schema source %q", source)
 		}
 	}
 
@@ -190,6 +197,64 @@ func Build(snapshot Snapshot) (*Graph, error) {
 		}
 	}
 	return graph, nil
+}
+
+func (graph *Graph) SchemaAffectingPath(path string) bool {
+	if graph == nil || strings.ToLower(filepath.Ext(path)) != ".py" {
+		return false
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absolute = resolvedPath(absolute)
+	for _, source := range graph.snapshot.SchemaSources {
+		if samePath(absolute, resolvedPath(source)) {
+			return true
+		}
+	}
+	for _, app := range graph.snapshot.Apps {
+		if pathWithin(resolvedPath(app.RootPath), absolute) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	ancestor := path
+	var suffix []string
+	for {
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return path
+		}
+		suffix = append([]string{filepath.Base(ancestor)}, suffix...)
+		ancestor = parent
+		if resolved, err := filepath.EvalSymlinks(ancestor); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Clean(filepath.Join(parts...))
+		}
+	}
+}
+
+func samePath(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func pathWithin(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || relative == ".." || filepath.IsAbs(relative) {
+		return false
+	}
+	return relative != "" && relative != "." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) || relative == "."
 }
 
 func validateModel(appKey, modelName string, model Model, snapshot Snapshot) error {
@@ -468,6 +533,10 @@ func buildModelIndex(name string, model Model) (*modelIndex, error) {
 		}
 		index.addAccess(field.field.Name, FieldAccessDeclared, field, true)
 		index.addAccess(field.field.Name, FieldAccessDeclared, field, false)
+		if field.field.EffectivePrimaryKey && field.field.Name != "pk" {
+			index.addAccess("pk", FieldAccessDeclared, field, true)
+			index.addAccess("pk", FieldAccessDeclared, field, false)
+		}
 		if field.field.IsRelation {
 			if err := index.addRelation(RelationQuery, field.field.Name, FieldAccessDeclared, field); err != nil {
 				return nil, err

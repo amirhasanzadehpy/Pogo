@@ -87,6 +87,23 @@ type ResolvedPathSegment struct {
 	Field *schema.FieldRef
 }
 
+type PathIssueCode string
+
+const (
+	IssueUnknownPathSegment   PathIssueCode = "django-orm.unknown-path-segment"
+	IssueNonRelationTraversal PathIssueCode = "django-orm.nonrelation-traversal"
+	IssueInvalidLookup        PathIssueCode = "django-orm.invalid-lookup-or-transform"
+	IssueInvalidProjection    PathIssueCode = "django-orm.invalid-projection-path"
+	IssueInvalidSelectRelated PathIssueCode = "django-orm.invalid-select-related-target"
+)
+
+type PathIssue struct {
+	Code    PathIssueCode
+	Segment PathSegment
+	Model   string
+	Field   *schema.FieldRef
+}
+
 func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement) (Context, bool) {
 	call, ok := enclosingCall(source, offset)
 	if !ok {
@@ -566,12 +583,124 @@ func ResolvePathSegment(graph *schema.Graph, canonicalLabel string, mode PathMod
 	var resolved ResolvedPathSegment
 	for index := 0; index <= target; index++ {
 		var ok bool
-		state, resolved, ok = consumePathSegment(graph, mode, state, segments[index], index < target)
+		state, resolved, ok = consumePathSegment(graph, mode, state, segments[index], index < len(segments)-1)
 		if !ok {
 			return ResolvedPathSegment{}, false
 		}
 	}
 	return resolved, true
+}
+
+func ValidatePath(graph *schema.Graph, canonicalLabel string, mode PathMode, segments []PathSegment) (PathIssue, bool) {
+	if graph == nil || canonicalLabel == "" || len(segments) == 0 || len(segments) > MaxPathSegments {
+		return PathIssue{}, false
+	}
+	state := resolverState{model: canonicalLabel}
+	for index, segment := range segments {
+		if segment.Text == "" {
+			issue := PathIssue{Segment: segment, Model: state.model, Field: state.field}
+			if issue.Field == nil {
+				issue.Field = state.relationField
+			}
+			switch mode {
+			case PathLookup:
+				if state.field != nil {
+					issue.Code = IssueInvalidLookup
+				} else {
+					issue.Code = IssueUnknownPathSegment
+				}
+			case PathProjection:
+				if state.field != nil {
+					issue.Code = IssueInvalidProjection
+				} else {
+					issue.Code = IssueUnknownPathSegment
+				}
+			case PathFields:
+				if state.field != nil {
+					issue.Code = IssueNonRelationTraversal
+				} else {
+					issue.Code = IssueUnknownPathSegment
+				}
+			default:
+				issue.Code = IssueUnknownPathSegment
+			}
+			return issue, true
+		}
+		previous := state
+		next, _, ok := consumePathSegment(graph, mode, state, segment, index < len(segments)-1)
+		if ok {
+			state = next
+			continue
+		}
+		issue := PathIssue{Segment: segment, Model: previous.model, Field: previous.field}
+		if issue.Field == nil {
+			issue.Field = previous.relationField
+		}
+		if issue.Field != nil && pathMetadataIndeterminate(issue.Field, previous.transforms, segment.Text, index < len(segments)-1) {
+			return PathIssue{}, false
+		}
+		switch mode {
+		case PathSelectRelated:
+			if _, exists := graph.QueryAccess(previous.model, segment.Text); exists {
+				issue.Code = IssueInvalidSelectRelated
+			} else {
+				issue.Code = IssueUnknownPathSegment
+			}
+		case PathPrefetchRelated:
+			if access, exists := graph.QueryAccess(previous.model, segment.Text); exists && !access.Field.IsRelation() {
+				issue.Code = IssueNonRelationTraversal
+			} else if access, exists := graph.InstanceAccess(previous.model, segment.Text); exists && !access.Field.IsRelation() {
+				issue.Code = IssueNonRelationTraversal
+			} else {
+				issue.Code = IssueUnknownPathSegment
+			}
+		case PathFields:
+			if previous.field != nil {
+				issue.Code = IssueNonRelationTraversal
+			} else {
+				issue.Code = IssueUnknownPathSegment
+			}
+		case PathProjection:
+			if previous.field != nil {
+				issue.Code = IssueInvalidProjection
+			} else if previous.relationField != nil {
+				issue.Code = IssueUnknownPathSegment
+			} else {
+				issue.Code = IssueUnknownPathSegment
+			}
+		case PathLookup:
+			if previous.field != nil {
+				issue.Code = IssueInvalidLookup
+			} else if previous.relationField != nil && previous.model != "" {
+				issue.Code = IssueUnknownPathSegment
+			} else {
+				issue.Code = IssueUnknownPathSegment
+			}
+		}
+		return issue, true
+	}
+	return PathIssue{}, false
+}
+
+func pathMetadataIndeterminate(field *schema.FieldRef, transforms []string, failed string, hasMore bool) bool {
+	if field.LookupPathsTruncated() {
+		return true
+	}
+	for _, lookup := range field.UnsupportedLookups() {
+		if lookup == failed && !hasMore {
+			return true
+		}
+	}
+	if !field.IsRelation() {
+		for _, path := range field.LookupPaths() {
+			for _, transform := range path.Transforms {
+				if transform == "*" && len(transforms) >= len(path.Transforms) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func consumePathSegment(graph *schema.Graph, mode PathMode, state resolverState, segment PathSegment, hasMore bool) (resolverState, ResolvedPathSegment, bool) {

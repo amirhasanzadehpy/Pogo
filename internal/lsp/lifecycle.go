@@ -3,6 +3,9 @@ package lsp
 import (
 	"context"
 	"errors"
+	"net/url"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -42,10 +45,12 @@ type Lifecycle struct {
 	factory                  WorkerFactory
 	workerConfigurationError error
 	features                 *Features
+	notifier                 glsp.NotifyFunc
 }
 
 type Worker interface {
-	Start(context.Context, func(error))
+	Start(context.Context, func(uint64, error))
+	DidSave(string)
 	Stop(context.Context) error
 }
 
@@ -80,6 +85,7 @@ func NewLifecycleContextWithFactory(ctx context.Context, cancel context.CancelFu
 		lifecycle.handler.TextDocumentDidOpen = lifecycle.features.didOpen
 		lifecycle.handler.TextDocumentDidChange = lifecycle.features.didChange
 		lifecycle.handler.TextDocumentDidClose = lifecycle.features.didClose
+		lifecycle.handler.TextDocumentDidSave = lifecycle.didSave
 		lifecycle.handler.TextDocumentCompletion = lifecycle.features.completion
 		lifecycle.handler.TextDocumentHover = lifecycle.features.hover
 		lifecycle.handler.TextDocumentSignatureHelp = lifecycle.features.signatureHelp
@@ -102,7 +108,7 @@ func (lifecycle *Lifecycle) Handle(ctx *glsp.Context) (any, bool, bool, error) {
 		}
 		lifecycle.mu.Unlock()
 		lifecycle.info("exit received")
-		lifecycle.stopWorker("exit")
+		_ = lifecycle.stopWorker("exit")
 		if lifecycle.cancel != nil {
 			lifecycle.cancel()
 		}
@@ -198,48 +204,119 @@ func (lifecycle *Lifecycle) initialize(_ *glsp.Context, params *protocol.Initial
 
 func (lifecycle *Lifecycle) initialized(ctx *glsp.Context, _ *protocol.InitializedParams) error {
 	lifecycle.info("initialized received")
+	lifecycle.mu.Lock()
+	lifecycle.notifier = ctx.Notify
+	lifecycle.mu.Unlock()
+	if lifecycle.features != nil {
+		lifecycle.features.SetNotifier(lifecycle.notify)
+	}
 	notifyFailure := func() {
-		if ctx.Notify != nil {
-			ctx.Notify(string(protocol.ServerWindowShowMessage), protocol.ShowMessageParams{
-				Type:    protocol.MessageTypeWarning,
-				Message: "Django schema loading failed; ORM data is unavailable or stale. See the language server log for details.",
-			})
-		}
+		lifecycle.notify(string(protocol.ServerWindowShowMessage), protocol.ShowMessageParams{
+			Type:    protocol.MessageTypeWarning,
+			Message: "Django schema loading failed; ORM data is unavailable or stale. See the language server log for details.",
+		})
 	}
 	if lifecycle.workerConfigurationError != nil {
 		notifyFailure()
 		return nil
 	}
 	if lifecycle.worker != nil {
-		lifecycle.worker.Start(lifecycle.ctx, func(_ error) {
-			notifyFailure()
+		lifecycle.worker.Start(lifecycle.ctx, func(generation uint64, err error) {
+			if err != nil {
+				go notifyFailure()
+				return
+			}
+			if generation > 0 && lifecycle.features != nil {
+				go lifecycle.features.RevalidateAll(generation)
+			}
 		})
 	}
 	return nil
 }
 
-func (lifecycle *Lifecycle) shutdown(_ *glsp.Context) error {
-	lifecycle.info("shutdown received")
-	if lifecycle.features != nil {
-		lifecycle.features.Close()
+func (lifecycle *Lifecycle) didSave(ctx *glsp.Context, params *protocol.DidSaveTextDocumentParams) error {
+	if lifecycle.features == nil || params == nil {
+		return nil
 	}
-	lifecycle.stopWorker("shutdown")
+	lifecycle.features.setNotifier(ctx)
+	uri := string(params.TextDocument.URI)
+	if err := lifecycle.features.save(uri, params.Text); err != nil {
+		return err
+	}
+	if lifecycle.worker != nil {
+		if path, ok := localFilePath(uri); ok {
+			lifecycle.worker.DidSave(path)
+		}
+	}
 	return nil
 }
 
-func (lifecycle *Lifecycle) StopWorker() {
-	lifecycle.stopWorker("connection close")
+func localFilePath(uri string) (string, bool) {
+	parsed, err := url.Parse(uri)
+	if err != nil || parsed.Scheme != "file" {
+		return "", false
+	}
+	if runtime.GOOS == "windows" {
+		if parsed.Host != "" && parsed.Host != "localhost" {
+			return filepath.Clean(`\\` + parsed.Host + filepath.FromSlash(parsed.Path)), true
+		}
+		path := parsed.Path
+		if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
+			path = path[1:]
+		}
+		path = filepath.FromSlash(path)
+		return filepath.Clean(path), path != ""
+	}
+	if parsed.Host != "" && parsed.Host != "localhost" {
+		return "", false
+	}
+	path := filepath.FromSlash(parsed.Path)
+	if path == "" {
+		return "", false
+	}
+	return filepath.Clean(path), true
 }
 
-func (lifecycle *Lifecycle) stopWorker(reason string) {
+func (lifecycle *Lifecycle) notify(method string, params any) {
+	lifecycle.mu.Lock()
+	notifier := lifecycle.notifier
+	allowed := !lifecycle.exited && lifecycle.state != stateShutdown
+	lifecycle.mu.Unlock()
+	if allowed && notifier != nil {
+		notifier(method, params)
+	}
+}
+
+func (lifecycle *Lifecycle) shutdown(_ *glsp.Context) error {
+	lifecycle.info("shutdown received")
+	lifecycle.mu.Lock()
+	lifecycle.state = stateShutdown
+	lifecycle.notifier = nil
+	lifecycle.mu.Unlock()
+	stopErr := lifecycle.stopWorker("shutdown")
+	if lifecycle.features != nil {
+		lifecycle.features.Close()
+	}
+	return stopErr
+}
+
+func (lifecycle *Lifecycle) StopWorker() {
+	_ = lifecycle.stopWorker("connection close")
+}
+
+func (lifecycle *Lifecycle) stopWorker(reason string) error {
 	if lifecycle.worker == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := lifecycle.worker.Stop(ctx); err != nil && lifecycle.log != nil {
-		lifecycle.log.Errorf("stop Python worker during %s: %s", reason, err)
+	if err := lifecycle.worker.Stop(ctx); err != nil {
+		if lifecycle.log != nil {
+			lifecycle.log.Errorf("stop Python worker during %s: %s", reason, err)
+		}
+		return err
 	}
+	return nil
 }
 
 func (lifecycle *Lifecycle) info(message string) {
