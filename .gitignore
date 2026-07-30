@@ -56,3 +56,8 @@ testdata/sample_django_project/db.sqlite3-*
 # IPC and benchmark artifacts
 *.sock
 /benchmark-results/
+
+# VS Code extension build and package artifacts
+/client/vscode/node_modules/
+/client/vscode/out/
+/client/vscode/*.vsix

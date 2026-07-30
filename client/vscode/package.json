@@ -1,0 +1,89 @@
+{
+  "name": "pogo",
+  "displayName": "Pogo",
+  "description": "Django ORM language support powered by the Pogo language server.",
+  "version": "0.1.0",
+  "publisher": "amirhasanzadehpy",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "python",
+    "django",
+    "orm",
+    "language-server",
+    "lsp"
+  ],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "main": "./out/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Pogo starts Django, which imports and executes code from the workspace."
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Pogo",
+      "properties": {
+        "pogo.executablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Path to the `django-orm-lsp` executable. Relative paths are resolved against the workspace folder. Leave empty to search the extension host's `PATH`."
+        },
+        "pogo.pythonPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Python interpreter used to start Django. Relative paths are resolved against the workspace folder. Leave empty to use Pogo's environment discovery."
+        },
+        "pogo.settingsModule": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Django settings module, such as `config.settings`. Leave empty to use Pogo's environment and project discovery."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('out', { recursive: true, force: true })\"",
+    "compile": "tsc --noEmit -p . && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
+    "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --watch",
+    "vscode:prepublish": "npm run clean && npm run compile",
+    "package": "vsce package --skip-license"
+  },
+  "dependencies": {
+    "vscode-languageclient": "10.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.24",
+    "@types/vscode": "1.91.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amirhasanzadehpy/Pogo.git",
+    "directory": "client/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/amirhasanzadehpy/Pogo/issues"
+  },
+  "homepage": "https://github.com/amirhasanzadehpy/Pogo/tree/main/client/vscode"
+}
