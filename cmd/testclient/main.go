@@ -54,6 +54,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if result.RSSBytes > 0 {
 		fmt.Fprintf(stdout, "Go idle RSS: %.2f MB\n", float64(result.RSSBytes)/(1024*1024))
 	}
+	if result.WorkerRSSBytes > 0 {
+		fmt.Fprintf(stdout, "Python idle RSS: %.2f MB\n", float64(result.WorkerRSSBytes)/(1024*1024))
+	}
 	fmt.Fprintf(stdout, "PASS %s\n", scenario.Name)
 	return 0
 }

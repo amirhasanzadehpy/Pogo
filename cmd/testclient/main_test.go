@@ -28,6 +28,7 @@ func TestLifecycleScenarios(t *testing.T) {
 		"eof.json",
 		"invalid-params.json",
 		"invalid-order.json",
+		"worker-lifecycle.json",
 	}
 	for _, scenario := range scenarios {
 		t.Run(strings.TrimSuffix(scenario, ".json"), func(t *testing.T) {
@@ -39,6 +40,14 @@ func TestLifecycleScenarios(t *testing.T) {
 			}
 			if scenario == "normal-shutdown.json" {
 				arguments = append(arguments, "-log-file", filepath.Join(temp, "protocol.log"))
+			}
+			if scenario == "worker-lifecycle.json" {
+				arguments = append(arguments,
+					"-log-file", filepath.Join(temp, "worker.log"),
+					"-project", filepath.Join(root, "testdata", "sample_django_project"),
+					"-settings", "sample_project.settings",
+					"-python", fixturePython(root),
+				)
 			}
 			command := exec.CommandContext(ctx, clientPath, arguments...)
 			output, err := command.CombinedOutput()
@@ -60,6 +69,20 @@ func TestLifecycleScenarios(t *testing.T) {
 			t.Errorf("protocol log does not contain %q:\n%s", event, logContent)
 		}
 	}
+	workerLog, err := os.ReadFile(filepath.Join(temp, "worker.log"))
+	if err != nil {
+		t.Fatalf("read worker log: %v", err)
+	}
+	if !bytes.Contains(workerLog, []byte("schema cache generation=1 models=7")) {
+		t.Fatalf("worker log has no loaded schema generation:\n%s", workerLog)
+	}
+}
+
+func fixturePython(root string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(root, ".venv-fixture", "Scripts", "python.exe")
+	}
+	return filepath.Join(root, ".venv-fixture", "bin", "python")
 }
 
 func TestRunRequiresScenario(t *testing.T) {

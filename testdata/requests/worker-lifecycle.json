@@ -1,0 +1,67 @@
+{
+  "name": "worker-lifecycle",
+  "timeout_ms": 10000,
+  "expect_exit_code": 0,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "processId": null,
+          "rootUri": null,
+          "capabilities": {}
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 1,
+        "result": {
+          "capabilities": {},
+          "serverInfo": {
+            "name": "django-orm-lsp",
+            "version": "0.1.0"
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+      }
+    },
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_rss": true},
+    {"sample_worker_rss": true},
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "shutdown"
+      }
+    },
+    {
+      "expect": {
+        "id": 2,
+        "result": null
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "exit"
+      }
+    },
+    {"expect_eof": true}
+  ]
+}

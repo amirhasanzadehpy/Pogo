@@ -13,13 +13,15 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Result struct {
-	ExitCode int
-	RSSBytes uint64
-	Stderr   string
+	ExitCode       int
+	RSSBytes       uint64
+	WorkerRSSBytes uint64
+	Stderr         string
 }
 
 type readEvent struct {
@@ -205,6 +207,17 @@ func RunScenario(parent context.Context, scenario Scenario, command []string, tr
 			} else {
 				fmt.Fprintln(trace, "RSS unavailable on this platform")
 			}
+		case step.SampleWorkerRSS:
+			rss, supported, err := sampleChildProcessRSS(ctx, cmd.Process.Pid)
+			if err != nil {
+				return result, fmt.Errorf("step %d: %w", index+1, err)
+			}
+			if supported {
+				result.WorkerRSSBytes = rss
+				fmt.Fprintf(trace, "WORKER RSS %.2f MB\n", float64(rss)/(1024*1024))
+			} else {
+				fmt.Fprintln(trace, "WORKER RSS unavailable on this platform")
+			}
 		}
 	}
 
@@ -380,6 +393,33 @@ func sampleProcessRSS(ctx context.Context, pid int) (uint64, bool, error) {
 		}
 	}
 	return maximum, true, nil
+}
+
+func sampleChildProcessRSS(ctx context.Context, parentPID int) (uint64, bool, error) {
+	if runtime.GOOS == "windows" {
+		return 0, false, nil
+	}
+	output, err := exec.CommandContext(ctx, "pgrep", "-P", strconv.Itoa(parentPID)).Output()
+	if err != nil {
+		return 0, true, fmt.Errorf("locate worker process: %w", err)
+	}
+	childPIDs := strings.Fields(string(output))
+	if len(childPIDs) == 0 {
+		return 0, true, errors.New("no worker process found")
+	}
+	var total uint64
+	for _, childPID := range childPIDs {
+		pid, err := strconv.Atoi(childPID)
+		if err != nil {
+			return 0, true, fmt.Errorf("parse worker PID: %w", err)
+		}
+		rss, _, err := sampleProcessRSS(ctx, pid)
+		if err != nil {
+			return 0, true, err
+		}
+		total += rss
+	}
+	return total, true, nil
 }
 
 func waitForSample(ctx context.Context, duration time.Duration) error {

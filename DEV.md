@@ -63,6 +63,21 @@ select the settings module explicitly. Introspection starts Django and executes
 trusted project imports; its JSON stdout must not be mixed with diagnostic
 output.
 
+Run the language server with the authenticated schema worker enabled:
+
+```sh
+build/django-orm-lsp \
+  -project testdata/sample_django_project \
+  -settings sample_project.settings \
+  -python .venv-fixture/bin/python \
+  -log-file build/protocol.log
+```
+
+The worker starts after the LSP `initialized` notification, communicates over a
+private local endpoint using bounded protocol-v1 JSON frames, and is stopped and
+reaped on shutdown, exit, or stdio EOF. Worker and project output is forwarded
+to the language-server log and never to LSP stdout.
+
 To run Django commands directly, invoke the virtual environment interpreter
 without activating it:
 

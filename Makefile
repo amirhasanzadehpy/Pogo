@@ -48,7 +48,8 @@ test-race:
 
 bench: build
 	@printf '%s\n' 'Completion latency: N/A (introduced in Milestone 5)'
-	@build/testclient -scenario testdata/requests/idle-rss.json -- build/django-orm-lsp
+	@build/testclient -scenario testdata/requests/worker-lifecycle.json -- build/django-orm-lsp -project "$(FIXTURE_DIR)" -settings sample_project.settings -python "$(FIXTURE_PYTHON)"
+	@go test $(GO_TEST_FLAGS) -run '^$$' -bench BenchmarkGraphLookup -benchmem ./internal/schema
 
 clean:
 	rm -rf "$(FIXTURE_VENV)" build bin benchmark-results

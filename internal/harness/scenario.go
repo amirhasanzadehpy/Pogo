@@ -19,12 +19,13 @@ type Scenario struct {
 }
 
 type Step struct {
-	Send       json.RawMessage  `json:"send,omitempty"`
-	SendRaw    *string          `json:"send_raw,omitempty"`
-	Expect     *ExpectedMessage `json:"expect,omitempty"`
-	CloseStdin bool             `json:"close_stdin,omitempty"`
-	ExpectEOF  bool             `json:"expect_eof,omitempty"`
-	SampleRSS  bool             `json:"sample_rss,omitempty"`
+	Send            json.RawMessage  `json:"send,omitempty"`
+	SendRaw         *string          `json:"send_raw,omitempty"`
+	Expect          *ExpectedMessage `json:"expect,omitempty"`
+	CloseStdin      bool             `json:"close_stdin,omitempty"`
+	ExpectEOF       bool             `json:"expect_eof,omitempty"`
+	SampleRSS       bool             `json:"sample_rss,omitempty"`
+	SampleWorkerRSS bool             `json:"sample_worker_rss,omitempty"`
 }
 
 type ExpectedMessage struct {
@@ -95,6 +96,9 @@ func (scenario Scenario) Validate() error {
 			actions++
 		}
 		if step.SampleRSS {
+			actions++
+		}
+		if step.SampleWorkerRSS {
 			actions++
 		}
 		if actions != 1 {
