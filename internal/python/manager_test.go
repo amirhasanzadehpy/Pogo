@@ -170,25 +170,25 @@ func TestManagerBoundsRestartsAndNotifiesOncePerOutage(t *testing.T) {
 func TestManagerBoundsImmediatePostLoadCrashes(t *testing.T) {
 	manager := &Manager{config: Config{RestartLimit: 3, BackoffBase: time.Millisecond}}
 	var attempts atomic.Int32
-	reached := make(chan struct{})
 	manager.run = func(_ context.Context, loaded func(uint64, int)) (bool, error) {
 		attempt := attempts.Add(1)
-		if attempt == 4 {
-			close(reached)
-		}
 		loaded(uint64(attempt), 7)
 		return false, errors.New("injected post-load crash")
 	}
 	var notifications atomic.Int32
+	outages := make(chan struct{}, 4)
 	manager.Start(context.Background(), func(_ uint64, err error) {
 		if err != nil {
 			notifications.Add(1)
+			outages <- struct{}{}
 		}
 	})
-	select {
-	case <-reached:
-	case <-time.After(time.Second):
-		t.Fatal("post-load crash loop did not reach degraded state")
+	for count := 0; count < 4; count++ {
+		select {
+		case <-outages:
+		case <-time.After(time.Second):
+			t.Fatal("post-load crash loop did not report every outage")
+		}
 	}
 	stopContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
