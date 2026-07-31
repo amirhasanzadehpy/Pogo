@@ -1,11 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
+
+func TestPogoCLIIdentity(t *testing.T) {
+	var stderr bytes.Buffer
+	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.1.0\n" {
+		t.Fatalf("pogo -version = code %d, output %q", exitCode, stderr.String())
+	}
+	stderr.Reset()
+	if exitCode := run([]string{"-help"}, &stderr); exitCode != 0 || !strings.Contains(stderr.String(), "Usage: pogo [options]") || !strings.Contains(stderr.String(), "Pogo LSP 3.16 server") {
+		t.Fatalf("pogo -help = code %d, output %q", exitCode, stderr.String())
+	}
+}
 
 func TestResolveWorkerConfigPrecedenceAndWorkspaceFallback(t *testing.T) {
 	t.Setenv("VIRTUAL_ENV", "")

@@ -21,7 +21,7 @@ SCHEMA_VERSION = 1
 LOOKUP_TRANSFORM_MAX_DEPTH = 2
 MAX_LOOKUP_PATHS = 512
 PROTOCOL_VERSION = 1
-MAX_IPC_FRAME_SIZE = 8 * 1024 * 1024
+MAX_IPC_FRAME_SIZE = 32 * 1024 * 1024
 WORKER_NETWORK_ENV = "POGO_WORKER_NETWORK"
 WORKER_ADDRESS_ENV = "POGO_WORKER_ADDRESS"
 WORKER_TOKEN_ENV = "POGO_WORKER_TOKEN"
@@ -964,15 +964,11 @@ class WorkerState:
         self.settings_name = settings_name
         self.project_root = None
         self.resolved_settings = None
-        self.snapshot = None
 
     def dump_schema(self):
-        if self.snapshot is not None:
-            return self.snapshot
         if self.project_root is None:
             self.project_root, self.resolved_settings = bootstrap(self.project, self.settings_name)
-        self.snapshot = build_snapshot(self.project_root, self.resolved_settings)
-        return self.snapshot
+        return build_snapshot(self.project_root, self.resolved_settings)
 
 
 def dispatch_request(request, worker_state):
@@ -1018,6 +1014,7 @@ def serve_connection(connection, project, settings_name, worker_state=None):
             return 1 if response["error"] is not None else 0
         if fatal:
             return 1
+        response = None
 
 
 def connect_worker(project, settings_name):

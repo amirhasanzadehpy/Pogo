@@ -31,12 +31,13 @@ type Change struct {
 }
 
 type Snapshot struct {
-	URI     string
-	Version int32
-	Source  []byte
-	Parsed  bool
-	Syntax  []SyntaxStatement
-	Calls   []SyntaxCall
+	URI      string
+	FilePath string
+	Version  int32
+	Source   []byte
+	Parsed   bool
+	Syntax   []SyntaxStatement
+	Calls    []SyntaxCall
 }
 
 type SyntaxCall struct {
@@ -58,11 +59,12 @@ type SyntaxStatement struct {
 }
 
 type document struct {
-	version int32
-	source  []byte
-	tree    *gotreesitter.Tree
-	syntax  []SyntaxStatement
-	calls   []SyntaxCall
+	filePath string
+	version  int32
+	source   []byte
+	tree     *gotreesitter.Tree
+	syntax   []SyntaxStatement
+	calls    []SyntaxCall
 }
 
 type Store struct {
@@ -118,6 +120,10 @@ func NewStore() (*Store, error) {
 }
 
 func (store *Store) Open(uri string, version int32, text string) error {
+	return store.OpenFile(uri, "", version, text)
+}
+
+func (store *Store) OpenFile(uri, filePath string, version int32, text string) error {
 	if uri == "" {
 		return errors.New("document URI is required")
 	}
@@ -131,7 +137,7 @@ func (store *Store) Open(uri string, version int32, text string) error {
 	}
 	store.mu.Lock()
 	previous := store.documents[uri]
-	store.documents[uri] = &document{version: version, source: source, tree: tree, syntax: store.extractSyntax(tree, source), calls: store.extractCalls(tree, source)}
+	store.documents[uri] = &document{filePath: filePath, version: version, source: source, tree: tree, syntax: store.extractSyntax(tree, source), calls: store.extractCalls(tree, source)}
 	store.mu.Unlock()
 	if previous != nil && previous.tree != nil && previous.tree != tree {
 		previous.tree.Release()
@@ -274,12 +280,13 @@ func (store *Store) Snapshot(uri string) (Snapshot, bool) {
 		return Snapshot{}, false
 	}
 	return Snapshot{
-		URI:     uri,
-		Version: current.version,
-		Source:  append([]byte(nil), current.source...),
-		Parsed:  current.tree != nil,
-		Syntax:  append([]SyntaxStatement(nil), current.syntax...),
-		Calls:   append([]SyntaxCall(nil), current.calls...),
+		URI:      uri,
+		FilePath: current.filePath,
+		Version:  current.version,
+		Source:   append([]byte(nil), current.source...),
+		Parsed:   current.tree != nil,
+		Syntax:   append([]SyntaxStatement(nil), current.syntax...),
+		Calls:    append([]SyntaxCall(nil), current.calls...),
 	}, true
 }
 
@@ -288,7 +295,7 @@ func (store *Store) Snapshots() []Snapshot {
 	snapshots := make([]Snapshot, 0, len(store.documents))
 	for uri, current := range store.documents {
 		snapshots = append(snapshots, Snapshot{
-			URI: uri, Version: current.version, Source: append([]byte(nil), current.source...), Parsed: current.tree != nil,
+			URI: uri, FilePath: current.filePath, Version: current.version, Source: append([]byte(nil), current.source...), Parsed: current.tree != nil,
 			Syntax: append([]SyntaxStatement(nil), current.syntax...), Calls: append([]SyntaxCall(nil), current.calls...),
 		})
 	}
@@ -509,6 +516,8 @@ func parameterStatements(source []byte, scopeStart, scopeEnd int) []SyntaxStatem
 	}
 	depth := 0
 	segmentStart := open + 1
+	parameterIndex := 0
+	nonInstanceMethod := functionHasDecorator(source, scopeStart, "staticmethod") || functionHasDecorator(source, scopeStart, "classmethod")
 	var statements []SyntaxStatement
 	appendSegment := func(end int) {
 		text := strings.TrimSpace(string(source[segmentStart:end]))
@@ -523,7 +532,11 @@ func parameterStatements(source []byte, scopeStart, scopeEnd int) []SyntaxStatem
 		if !identifierText(name) {
 			return
 		}
-		if colon := strings.IndexByte(text, ':'); colon >= 0 {
+		modelReceiver := parameterIndex == 0 && name == "self" && !nonInstanceMethod
+		parameterIndex++
+		if modelReceiver {
+			text = name + " = __pogo_model_receiver__"
+		} else if colon := strings.IndexByte(text, ':'); colon >= 0 {
 			annotated := name + text[colon:]
 			if annotationPattern.MatchString(annotated) {
 				text = annotated
@@ -560,6 +573,30 @@ func parameterStatements(source []byte, scopeStart, scopeEnd int) []SyntaxStatem
 		}
 	}
 	return statements
+}
+
+func functionHasDecorator(source []byte, scopeStart int, name string) bool {
+	lineStart := bytes.LastIndexByte(source[:scopeStart], '\n') + 1
+	for lineStart > 0 {
+		end := lineStart - 1
+		if end > 0 && source[end-1] == '\r' {
+			end--
+		}
+		start := bytes.LastIndexByte(source[:end], '\n') + 1
+		line := strings.TrimSpace(string(source[start:end]))
+		if !strings.HasPrefix(line, "@") {
+			return false
+		}
+		decorator := strings.TrimSpace(strings.TrimPrefix(line, "@"))
+		if opening := strings.IndexByte(decorator, '('); opening >= 0 {
+			decorator = strings.TrimSpace(decorator[:opening])
+		}
+		if decorator == name || strings.HasSuffix(decorator, "."+name) {
+			return true
+		}
+		lineStart = start
+	}
+	return false
 }
 
 func (store *Store) parse(source []byte, oldTree *gotreesitter.Tree) (*gotreesitter.Tree, error) {

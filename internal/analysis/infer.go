@@ -66,14 +66,18 @@ var (
 )
 
 func Analyze(source []byte, offset int, graph *schema.Graph) (Context, bool) {
-	return analyze(source, offset, graph, nil)
+	return analyze(source, offset, graph, nil, "")
 }
 
 func AnalyzeSyntax(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement) (Context, bool) {
-	return analyze(source, offset, graph, syntax)
+	return analyze(source, offset, graph, syntax, "")
 }
 
-func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement) (Context, bool) {
+func AnalyzeSyntaxFile(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
+	return analyze(source, offset, graph, syntax, filePath)
+}
+
+func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
 	if graph == nil || offset < 0 || offset > len(source) {
 		return Context{}, false
 	}
@@ -92,7 +96,7 @@ func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStat
 	if receiver.Start == receiver.End {
 		return Context{}, false
 	}
-	value := inferExpression(strings.TrimSpace(string(source[receiver.Start:receiver.End])), source[:offset], graph, syntax, offset)
+	value := inferExpressionAtPath(strings.TrimSpace(string(source[receiver.Start:receiver.End])), source[:offset], graph, syntax, offset, filePath)
 	switch value.Kind {
 	case ValueModelClass:
 		return Context{Kind: ContextModelMember, Value: value, Identifier: identifier, Replacement: replacement}, true
@@ -303,11 +307,19 @@ func isIdentifierByte(value byte) bool {
 }
 
 func inferExpression(expression string, sourcePrefix []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int) Value {
-	imports, values := buildEnvironment(sourcePrefix, graph, syntax, offset)
+	return inferExpressionAtPath(expression, sourcePrefix, graph, syntax, offset, "")
+}
+
+func inferExpressionAtPath(expression string, sourcePrefix []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int, filePath string) Value {
+	imports, values := buildEnvironmentAtPath(sourcePrefix, graph, syntax, offset, filePath)
 	return resolveExpression(expression, imports, values, graph)
 }
 
 func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int) (map[string]string, map[string]Value) {
+	return buildEnvironmentAtPath(source, graph, syntax, offset, "")
+}
+
+func buildEnvironmentAtPath(source []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int, filePath string) (map[string]string, map[string]Value) {
 	imports := make(map[string]string)
 	values := make(map[string]Value)
 	var guardedBindings []string
@@ -416,7 +428,14 @@ func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStateme
 			continue
 		}
 		if match := assignmentPattern.FindStringSubmatch(line); match != nil {
-			value := resolveExpression(match[2], imports, values, graph)
+			value := Value{}
+			if match[1] == "self" && strings.TrimSpace(match[2]) == "__pogo_model_receiver__" {
+				if label, ok := enclosingModelLabel(syntax, offset, filePath, graph); ok {
+					value = Value{CanonicalLabel: label, Kind: ValueModelInstance}
+				}
+			} else {
+				value = resolveExpression(match[2], imports, values, graph)
+			}
 			delete(imports, match[1])
 			values[match[1]] = value
 		}
@@ -434,6 +453,60 @@ func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStateme
 		delete(values, name)
 	}
 	return imports, values
+}
+
+func enclosingModelLabel(syntax []SyntaxStatement, offset int, filePath string, graph *schema.Graph) (string, bool) {
+	if graph == nil || filePath == "" {
+		return "", false
+	}
+	current := SyntaxStatement{}
+	for _, statement := range syntax {
+		if !statement.ScopeMarker || statement.ScopeStart > offset || offset > statement.ScopeEnd {
+			continue
+		}
+		if current.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < current.ScopeEnd-current.ScopeStart {
+			current = statement
+		}
+	}
+	if current.ScopeKind != "function_definition" {
+		return "", false
+	}
+	parent := SyntaxStatement{}
+	for _, statement := range syntax {
+		if !statement.ScopeMarker || statement.Start == current.Start && statement.End == current.End || statement.ScopeStart > current.ScopeStart || current.ScopeEnd > statement.ScopeEnd {
+			continue
+		}
+		if parent.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < parent.ScopeEnd-parent.ScopeStart {
+			parent = statement
+		}
+	}
+	if parent.ScopeKind != "class_definition" {
+		return "", false
+	}
+	var classes []SyntaxStatement
+	for _, statement := range syntax {
+		if statement.ScopeMarker && statement.ScopeKind == "class_definition" && statement.ScopeStart <= current.ScopeStart && current.ScopeEnd <= statement.ScopeEnd {
+			classes = append(classes, statement)
+		}
+	}
+	sort.Slice(classes, func(left, right int) bool {
+		if classes[left].ScopeStart != classes[right].ScopeStart {
+			return classes[left].ScopeStart < classes[right].ScopeStart
+		}
+		return classes[left].ScopeEnd > classes[right].ScopeEnd
+	})
+	qualname := make([]string, 0, len(classes))
+	for _, class := range classes {
+		match := definitionBindingPattern.FindStringSubmatch(class.Text)
+		if match == nil {
+			return "", false
+		}
+		qualname = append(qualname, match[1])
+	}
+	if len(qualname) == 0 {
+		return "", false
+	}
+	return graph.CanonicalLabelForSourceClass(filePath, strings.Join(qualname, "."))
 }
 
 func importBindingNames(line string) []string {
@@ -600,6 +673,9 @@ func recognizedEnvironmentStatement(text string) bool {
 
 func resolveExpression(expression string, imports map[string]string, values map[string]Value, graph *schema.Graph) Value {
 	expression = strings.TrimSpace(expression)
+	if len(expression) > MaxPathBytes {
+		return Value{}
+	}
 	for strings.HasPrefix(expression, "(") {
 		end, ok := skipCall(expression, 0)
 		if !ok || end != len(expression) {
@@ -655,7 +731,12 @@ func resolveExpression(expression string, imports map[string]string, values map[
 		value.Kind = ValueModelInstance
 		position = end
 	}
+	segments := 0
 	for position < len(expression) {
+		segments++
+		if segments > MaxPathSegments {
+			return Value{}
+		}
 		position = skipExpressionSpace(expression, position)
 		if position == len(expression) {
 			return value
@@ -727,11 +808,41 @@ func resolveExpression(expression string, imports map[string]string, values map[
 			default:
 				return Value{}
 			}
+		case ValueModelInstance:
+			if called {
+				return Value{}
+			}
+			access, ok := graph.InstanceAccess(value.CanonicalLabel, name)
+			if !ok || access.Field == nil {
+				return Value{}
+			}
+			label, ok := singleRelatedInstance(access.Field)
+			if !ok {
+				return Value{}
+			}
+			value = Value{CanonicalLabel: label, Kind: ValueModelInstance}
 		default:
 			return Value{}
 		}
 	}
 	return value
+}
+
+func singleRelatedInstance(field *schema.FieldRef) (string, bool) {
+	if field == nil || !field.IsRelation() {
+		return "", false
+	}
+	cardinality, ok := field.RelationCardinality()
+	if !ok {
+		return "", false
+	}
+	if cardinality != schema.RelationOneToOne {
+		direction, hasDirection := field.RelationDirection()
+		if cardinality != schema.RelationManyToOne || !hasDirection || direction != schema.RelationForward {
+			return "", false
+		}
+	}
+	return field.RelatedModel()
 }
 
 func methodForValue(graph *schema.Graph, value Value, name string) (*schema.MethodRef, bool) {

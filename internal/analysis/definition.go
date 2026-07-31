@@ -10,10 +10,14 @@ import (
 var importedNamePattern = regexp.MustCompile(`(?m)([A-Za-z_][A-Za-z0-9_]*)\s*(?:as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*(?:,|$)`)
 
 func ResolveDefinitionSyntax(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement) (schema.SourceRange, bool) {
+	return ResolveDefinitionSyntaxFile(source, offset, graph, syntax, "")
+}
+
+func ResolveDefinitionSyntaxFile(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (schema.SourceRange, bool) {
 	if graph == nil || offset < 0 || offset > len(source) {
 		return schema.SourceRange{}, false
 	}
-	if context, ok := AnalyzeSyntax(source, offset, graph, syntax); ok && context.Identifier != "" {
+	if context, ok := AnalyzeSyntaxFile(source, offset, graph, syntax, filePath); ok && context.Identifier != "" {
 		if sourceRange, resolved := contextSourceRange(context, graph); resolved {
 			return sourceRange, true
 		}

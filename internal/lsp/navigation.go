@@ -43,7 +43,11 @@ func (features *Features) Definition(uri string, position analysis.Position) (*p
 		return nil, errors.New("definition position is not valid for the document")
 	}
 	graph, _ := features.cache.Load()
-	sourceRange, ok := analysis.ResolveDefinitionSyntax(snapshot.Source, offset, graph, snapshot.Syntax)
+	filePath := snapshot.FilePath
+	if filePath == "" {
+		filePath, _ = localFilePath(uri)
+	}
+	sourceRange, ok := analysis.ResolveDefinitionSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, filePath)
 	if !ok {
 		return nil, nil
 	}

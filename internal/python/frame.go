@@ -8,7 +8,9 @@ import (
 	"io"
 )
 
-const MaxFrameSize = 8 * 1024 * 1024
+// MaxFrameSize bounds the trusted local worker channel while leaving room for
+// large production Django registries. Keep this synchronized with the worker.
+const MaxFrameSize = 32 * 1024 * 1024
 
 var ErrFrameTooLarge = errors.New("IPC frame exceeds maximum size")
 

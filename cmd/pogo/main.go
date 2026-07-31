@@ -30,8 +30,8 @@ func run(args []string, stderr io.Writer) int {
 	flags := flag.NewFlagSet(lsp.ServerName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: django-orm-lsp [options]")
-		fmt.Fprintln(stderr, "Django ORM LSP 3.16 server over stdio; stdout is reserved for protocol traffic.")
+		fmt.Fprintln(stderr, "Usage: pogo [options]")
+		fmt.Fprintln(stderr, "Pogo LSP 3.16 server over stdio; stdout is reserved for protocol traffic.")
 		fmt.Fprintln(stderr, "Run only against trusted projects: Django startup executes project code.")
 		flags.PrintDefaults()
 	}

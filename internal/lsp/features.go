@@ -3,6 +3,7 @@ package lsp
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -70,7 +71,12 @@ func (features *Features) didOpen(ctx *glsp.Context, params *protocol.DidOpenTex
 		return nil
 	}
 	features.setNotifier(ctx)
-	if err := features.documents.Open(string(params.TextDocument.URI), int32(params.TextDocument.Version), params.TextDocument.Text); err != nil {
+	uri := string(params.TextDocument.URI)
+	filePath, _ := localFilePath(uri)
+	if resolved, err := filepath.EvalSymlinks(filePath); err == nil {
+		filePath = resolved
+	}
+	if err := features.documents.OpenFile(uri, filePath, int32(params.TextDocument.Version), params.TextDocument.Text); err != nil {
 		return err
 	}
 	features.publishURI(string(params.TextDocument.URI))
@@ -149,7 +155,11 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 		return nil, errors.New("completion position is not valid for the document")
 	}
 	graph, _ := features.cache.Load()
-	context, ok := analysis.AnalyzeSyntax(snapshot.Source, offset, graph, snapshot.Syntax)
+	filePath := snapshot.FilePath
+	if filePath == "" {
+		filePath, _ = localFilePath(uri)
+	}
+	context, ok := analysis.AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, filePath)
 	if !ok {
 		return nil, nil
 	}
@@ -217,7 +227,11 @@ func (features *Features) Hover(uri string, position analysis.Position) (*protoc
 		return nil, errors.New("hover position is not valid for the document")
 	}
 	graph, _ := features.cache.Load()
-	context, ok := analysis.AnalyzeSyntax(snapshot.Source, offset, graph, snapshot.Syntax)
+	filePath := snapshot.FilePath
+	if filePath == "" {
+		filePath, _ = localFilePath(uri)
+	}
+	context, ok := analysis.AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, filePath)
 	if !ok || context.Identifier == "" {
 		return nil, nil
 	}

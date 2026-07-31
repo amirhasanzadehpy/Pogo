@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
-import { access, stat } from 'node:fs/promises';
+import { access, readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
+import { parse as parseDotenv } from 'dotenv';
 import * as vscode from 'vscode';
 import {
   LanguageClient,
@@ -8,7 +9,7 @@ import {
   type ServerOptions,
 } from 'vscode-languageclient/node';
 
-const executableName = 'django-orm-lsp';
+const executableName = 'pogo';
 const executableSetting = 'pogo.executablePath';
 const releasesURL = vscode.Uri.parse(
   'https://github.com/amirhasanzadehpy/Pogo/releases',
@@ -85,18 +86,26 @@ async function reconcileClients(restartAll: boolean): Promise<void> {
       notifyMissingExecutable(target.folder);
       continue;
     }
+    if (shuttingDown) {
+      return;
+    }
 
-    const client = createClient(target, executable);
-    clients.set(target.key, client);
+    let client: LanguageClient | undefined;
     try {
+      client = await createClient(target, executable);
+      if (shuttingDown) {
+        await client.dispose().catch(() => undefined);
+        return;
+      }
+      clients.set(target.key, client);
       await client.start();
     } catch (error: unknown) {
       clients.delete(target.key);
-      await client.dispose().catch(() => undefined);
+      await client?.dispose().catch(() => undefined);
       console.error(`Failed to start Pogo client ${target.key}:`, error);
       void vscode.window.showErrorMessage(
         `Pogo could not start for ${target.folder?.name ?? 'this window'}. ` +
-          'Open the Pogo output channel for details.',
+          `${errorMessage(error)}.`,
       );
     }
   }
@@ -115,7 +124,10 @@ function currentTargets(): ClientTarget[] {
   }));
 }
 
-function createClient(target: ClientTarget, executable: string): LanguageClient {
+async function createClient(
+  target: ClientTarget,
+  executable: string,
+): Promise<LanguageClient> {
   const configuration = vscode.workspace.getConfiguration(
     'pogo',
     target.folder?.uri,
@@ -135,12 +147,18 @@ function createClient(target: ClientTarget, executable: string): LanguageClient 
           ...(pythonPath === '' ? {} : { pythonPath }),
           ...(settingsModule === '' ? {} : { settingsModule }),
         };
+  const environment = await resolveServerEnvironment(
+    configuration,
+    target.folder,
+  );
   const serverOptions: ServerOptions = {
     command: executable,
-    options:
-      target.folder === undefined
-        ? undefined
-        : { cwd: target.folder.uri.fsPath },
+    options: {
+      ...(target.folder === undefined
+        ? {}
+        : { cwd: target.folder.uri.fsPath }),
+      env: environment,
+    },
   };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
@@ -219,6 +237,65 @@ function createClient(target: ClientTarget, executable: string): LanguageClient 
     serverOptions,
     clientOptions,
   );
+}
+
+async function resolveServerEnvironment(
+  configuration: vscode.WorkspaceConfiguration,
+  folder: vscode.WorkspaceFolder | undefined,
+): Promise<NodeJS.ProcessEnv> {
+  const environment = { ...process.env };
+  const configuredEnvFile = configuration.get<string>('envFile', '').trim();
+  if (configuredEnvFile !== '') {
+    if (!path.isAbsolute(configuredEnvFile) && folder === undefined) {
+      throw new Error('a relative pogo.envFile requires a workspace folder');
+    }
+    const envFile = path.isAbsolute(configuredEnvFile)
+      ? path.normalize(configuredEnvFile)
+      : path.resolve(folder!.uri.fsPath, configuredEnvFile);
+    let contents: string;
+    try {
+      contents = await readFile(envFile, 'utf8');
+    } catch (error: unknown) {
+      throw new Error(
+        `could not read pogo.envFile '${envFile}': ${errorMessage(error)}`,
+      );
+    }
+    for (const [key, value] of Object.entries(parseDotenv(contents))) {
+      setEnvironmentValue(environment, key, value);
+    }
+  }
+
+  const overrides = configuration.get<Record<string, string | null>>(
+    'environment',
+    {},
+  );
+  for (const [key, value] of Object.entries(overrides)) {
+    setEnvironmentValue(environment, key, value);
+  }
+  return environment;
+}
+
+function setEnvironmentValue(
+  environment: NodeJS.ProcessEnv,
+  key: string,
+  value: string | null,
+): void {
+  const existingKey =
+    process.platform === 'win32'
+      ? Object.keys(environment).find(
+          (candidate) => candidate.toUpperCase() === key.toUpperCase(),
+        )
+      : key;
+  if (existingKey !== undefined) {
+    delete environment[existingKey];
+  }
+  if (value !== null) {
+    environment[key] = value;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function ownsDocument(target: ClientTarget, uri: vscode.Uri): boolean {

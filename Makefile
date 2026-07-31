@@ -20,7 +20,7 @@ all: build
 
 build:
 	mkdir -p build
-	go build $(GO_BUILD_FLAGS) -o build/django-orm-lsp ./cmd/django-orm-lsp
+	go build $(GO_BUILD_FLAGS) -o build/pogo ./cmd/pogo
 	go build $(GO_BUILD_FLAGS) -o build/testclient ./cmd/testclient
 
 $(FIXTURE_STAMP): $(FIXTURE_REQUIREMENTS) $(FIXTURE_CONSTRAINTS)
@@ -38,7 +38,7 @@ test-env: fixture-env
 
 test:
 	@test -x "$(FIXTURE_PYTHON)" || { printf '%s\n' 'Fixture environment missing; run `make fixture-env` first.' >&2; exit 1; }
-	@GO_FILES=$$(git ls-files --cached --others --exclude-standard -- '*.go'); if test -n "$$GO_FILES"; then UNFORMATTED=$$(gofmt -l $$GO_FILES); test -z "$$UNFORMATTED" || { printf 'Unformatted Go files:\n%s\n' "$$UNFORMATTED" >&2; exit 1; }; fi
+	@GO_FILES=$$(git ls-files --cached --others --exclude-standard -- '*.go' | while IFS= read -r FILE; do test ! -f "$$FILE" || printf '%s\n' "$$FILE"; done); if test -n "$$GO_FILES"; then UNFORMATTED=$$(gofmt -l $$GO_FILES); test -z "$$UNFORMATTED" || { printf 'Unformatted Go files:\n%s\n' "$$UNFORMATTED" >&2; exit 1; }; fi
 	go vet -tags=$(GO_GRAMMAR_TAGS) ./...
 	go test $(GO_TEST_FLAGS) ./...
 	PYTHONDONTWRITEBYTECODE=1 "$(FIXTURE_PYTHON)" -m unittest discover -s "$(FIXTURE_DIR)/tests" -p 'test_*.py' -v
@@ -64,7 +64,7 @@ compat:
 	@"$(PYTHON)" scripts/compat.py
 
 release-check: build
-	@"$(PYTHON)" scripts/check_release.py build/django-orm-lsp build/testclient
+	@"$(PYTHON)" scripts/check_release.py build/pogo build/testclient
 
 clean:
 	rm -rf "$(FIXTURE_VENV)" build bin benchmark-results

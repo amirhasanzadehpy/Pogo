@@ -30,7 +30,7 @@ func TestDiagnosticPublicationOpenChangeClose(t *testing.T) {
 		t.Fatalf("open publications = %#v", publications)
 	}
 	diagnostic := publications[0].Diagnostics[0]
-	if diagnostic.Code == nil || diagnostic.Code.Value != string(analysis.IssueUnknownPathSegment) || diagnostic.Source == nil || *diagnostic.Source != diagnosticSource {
+	if diagnostic.Code == nil || diagnostic.Code.Value != string(analysis.IssueUnknownPathSegment) || diagnostic.Source == nil || *diagnostic.Source != "pogo" || diagnosticSource != "pogo" {
 		t.Fatalf("diagnostic = %#v", diagnostic)
 	}
 	missing := strings.Index(invalid, "missing")

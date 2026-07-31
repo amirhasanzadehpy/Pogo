@@ -15,9 +15,9 @@ import (
 func TestLifecycleScenarios(t *testing.T) {
 	root := repositoryRoot(t)
 	temp := t.TempDir()
-	serverPath := filepath.Join(temp, "django-orm-lsp")
+	serverPath := filepath.Join(temp, "pogo")
 	clientPath := filepath.Join(temp, "testclient")
-	buildCommand(t, root, serverPath, "./cmd/django-orm-lsp")
+	buildCommand(t, root, serverPath, "./cmd/pogo")
 	buildCommand(t, root, clientPath, "./cmd/testclient")
 
 	scenarios := []string{

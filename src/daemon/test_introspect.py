@@ -1,3 +1,4 @@
+import gc
 import hashlib
 import json
 import os
@@ -7,7 +8,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+import weakref
 
 import introspect
 
@@ -453,7 +456,7 @@ class IntrospectionTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(failures, ["IPC frame exceeds maximum size"])
 
-    def test_worker_bounds_error_ids_and_caches_schema(self):
+    def test_worker_bounds_error_ids_without_retaining_schema(self):
         oversized_id = "x" * 1024
         with self.assertRaises(introspect.PayloadError) as raised:
             introspect.validate_request(
@@ -479,8 +482,58 @@ class IntrospectionTests(unittest.TestCase):
             second = state.dump_schema()
         finally:
             introspect.build_snapshot = original_builder
-        self.assertIs(first, second)
-        self.assertEqual(len(calls), 1)
+        self.assertIsNot(first, second)
+        self.assertEqual(len(calls), 2)
+
+    def test_worker_releases_schema_response_before_waiting_for_next_request(self):
+        class Snapshot(dict):
+            pass
+
+        class ReleasableState:
+            reference = None
+
+            def dump_schema(self):
+                snapshot = Snapshot(schema_version=1, apps={})
+                self.reference = weakref.ref(snapshot)
+                return snapshot
+
+        state = ReleasableState()
+        server, worker = socket.socketpair()
+        result = []
+
+        def serve():
+            result.append(
+                introspect.serve_connection(
+                    worker,
+                    str(PROJECT_ROOT),
+                    "sample_project.settings",
+                    worker_state=state,
+                )
+            )
+            worker.close()
+
+        thread = threading.Thread(target=serve)
+        thread.start()
+        reader = introspect.FrameReader(server)
+        introspect.write_message(
+            server,
+            {"protocol_version": 1, "id": "load", "method": "schema/load", "params": {}},
+        )
+        self.assertEqual(introspect.decode_object(reader.read())["id"], "load")
+        for _ in range(100):
+            gc.collect()
+            if state.reference() is None:
+                break
+            time.sleep(0.01)
+        self.assertIsNone(state.reference())
+        introspect.write_message(
+            server,
+            {"protocol_version": 1, "id": "stop", "method": "worker/shutdown", "params": {}},
+        )
+        self.assertEqual(introspect.decode_object(reader.read())["id"], "stop")
+        server.close()
+        thread.join(timeout=2)
+        self.assertEqual(result, [0])
 
     def test_oversized_schema_returns_correlated_structured_error(self):
         class OversizedState:
@@ -519,6 +572,18 @@ class IntrospectionTests(unittest.TestCase):
         server.close()
         thread.join(timeout=2)
         self.assertEqual(result, [0])
+
+    def test_schema_response_can_exceed_legacy_frame_limit(self):
+        legacy_maximum = 8 * 1024 * 1024
+        measured_quera_schema_size = 14_081_193
+        response = introspect.success_response(
+            "large-schema",
+            {"value": "x" * measured_quera_schema_size},
+        )
+        payload = introspect.encode_message(response)
+        self.assertGreater(len(payload), legacy_maximum)
+        self.assertGreater(len(payload), measured_quera_schema_size)
+        self.assertLess(len(payload), introspect.MAX_IPC_FRAME_SIZE)
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix sockets are unavailable")
     def test_authenticated_worker_subprocess_loads_schema_and_shuts_down(self):

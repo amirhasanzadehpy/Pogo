@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	ServerName    = "django-orm-lsp"
+	ServerName    = "pogo"
 	ServerVersion = "0.1.0"
 )
 
@@ -72,11 +72,24 @@ func NewLifecycleContext(ctx context.Context, cancel context.CancelFunc, logger 
 		lifecycle.worker = workers[0]
 	}
 	lifecycle.handler = protocol.Handler{
-		Initialize:  lifecycle.initialize,
-		Initialized: lifecycle.initialized,
-		Shutdown:    lifecycle.shutdown,
+		CancelRequest: lifecycle.cancelRequest,
+		Initialize:    lifecycle.initialize,
+		Initialized:   lifecycle.initialized,
+		SetTrace:      lifecycle.setTrace,
+		Shutdown:      lifecycle.shutdown,
 	}
 	return lifecycle
+}
+
+func (lifecycle *Lifecycle) cancelRequest(_ *glsp.Context, _ *protocol.CancelParams) error {
+	// Feature handlers are synchronous and bounded. Accept cancellation
+	// notifications so clients do not receive a method-not-supported error.
+	return nil
+}
+
+func (lifecycle *Lifecycle) setTrace(_ *glsp.Context, params *protocol.SetTraceParams) error {
+	protocol.SetTraceValue(params.Value)
+	return nil
 }
 
 func NewLifecycleContextWithFactory(ctx context.Context, cancel context.CancelFunc, logger commonlog.Logger, factory WorkerFactory, featureSets ...*Features) *Lifecycle {
@@ -131,7 +144,7 @@ func (lifecycle *Lifecycle) Handle(ctx *glsp.Context) (any, bool, bool, error) {
 		if ctx.Method == protocol.MethodInitialize {
 			return nil, true, true, errors.New("initialize may only be sent once")
 		}
-		if ctx.Method != protocol.MethodInitialized {
+		if ctx.Method != protocol.MethodInitialized && ctx.Method != protocol.MethodCancelRequest && ctx.Method != protocol.MethodSetTrace {
 			return nil, true, true, errors.New("initialized notification not received")
 		}
 	case stateRunning:

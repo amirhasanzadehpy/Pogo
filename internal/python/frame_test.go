@@ -37,6 +37,26 @@ func TestFrameRoundTripAndBounds(t *testing.T) {
 	}
 }
 
+func TestFrameSupportsProductionScaleSchemaResponse(t *testing.T) {
+	const legacyMaximum = 8 * 1024 * 1024
+	const measuredQueraSchemaSize = 14_081_193
+	value := strings.Repeat("x", measuredQueraSchemaSize)
+	var buffer bytes.Buffer
+	if err := WriteFrame(&buffer, map[string]string{"schema": value}); err != nil {
+		t.Fatalf("WriteFrame() production-scale error = %v", err)
+	}
+	payload, err := ReadFrame(bufio.NewReader(&buffer))
+	if err != nil {
+		t.Fatalf("ReadFrame() production-scale error = %v", err)
+	}
+	if len(payload) <= legacyMaximum {
+		t.Fatalf("production-scale frame length = %d, want > %d", len(payload), legacyMaximum)
+	}
+	if len(payload) <= measuredQueraSchemaSize {
+		t.Fatalf("production-scale frame length = %d, want > %d", len(payload), measuredQueraSchemaSize)
+	}
+}
+
 func TestClientCorrelatesResponsesAndSerializesRequests(t *testing.T) {
 	clientConnection, workerConnection := net.Pipe()
 	client := newClient(clientConnection, time.Second)

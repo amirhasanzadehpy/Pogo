@@ -9,12 +9,12 @@ editor hot path.
 
 ## Quick Start
 
-1. Download `django-orm-lsp` for your operating system from
+1. Download `pogo` for your operating system from
    [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases).
 2. Put the executable on `PATH` and confirm it runs:
 
    ```sh
-   django-orm-lsp -version
+   pogo -version
    ```
 
 3. Add the setup for [VS Code](#vs-code), [Neovim](#neovim), or
@@ -38,9 +38,9 @@ user:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
-install -m 0755 "$HOME/Downloads/django-orm-lsp" "$HOME/.local/bin/django-orm-lsp"
+install -m 0755 "$HOME/Downloads/pogo" "$HOME/.local/bin/pogo"
 export PATH="$HOME/.local/bin:$PATH"
-django-orm-lsp -version
+pogo -version
 ```
 
 Make the `PATH` change permanent by adding this line to `~/.profile`,
@@ -53,8 +53,8 @@ export PATH="$HOME/.local/bin:$PATH"
 For a machine-wide installation instead:
 
 ```sh
-sudo install -m 0755 "$HOME/Downloads/django-orm-lsp" /usr/local/bin/django-orm-lsp
-django-orm-lsp -version
+sudo install -m 0755 "$HOME/Downloads/pogo" /usr/local/bin/pogo
+pogo -version
 ```
 
 If macOS reports that the downloaded binary cannot be opened, approve it in
@@ -62,24 +62,24 @@ If macOS reports that the downloaded binary cannot be opened, approve it in
 after verifying the release checksum:
 
 ```sh
-xattr -d com.apple.quarantine "$HOME/.local/bin/django-orm-lsp"
+xattr -d com.apple.quarantine "$HOME/.local/bin/pogo"
 ```
 
 ### Windows
 
-Download `django-orm-lsp.exe`, then run this in PowerShell:
+Download `pogo.exe`, then run this in PowerShell:
 
 ```powershell
 $PogoBin = Join-Path $HOME ".local\bin"
 New-Item -ItemType Directory -Force $PogoBin | Out-Null
-Copy-Item "$HOME\Downloads\django-orm-lsp.exe" "$PogoBin\django-orm-lsp.exe"
+Copy-Item "$HOME\Downloads\pogo.exe" "$PogoBin\pogo.exe"
 
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (($UserPath -split ";") -notcontains $PogoBin) {
     [Environment]::SetEnvironmentVariable("Path", "$PogoBin;$UserPath", "User")
 }
 $env:Path = "$PogoBin;$env:Path"
-django-orm-lsp.exe -version
+pogo.exe -version
 ```
 
 Restart the editor after changing the user `PATH`.
@@ -92,10 +92,10 @@ Building requires Git, Go 1.22 or newer, and `make` on Linux/macOS:
 git clone https://github.com/amirhasanzadehpy/Pogo.git
 cd Pogo
 make build
-./build/django-orm-lsp -version
+./build/pogo -version
 ```
 
-The development binary remains at `build/django-orm-lsp` on Linux/macOS and
+The development binary remains at `build/pogo` on Linux/macOS and
 can be used directly without installing it globally.
 
 On Windows, build the server from PowerShell with:
@@ -104,8 +104,8 @@ On Windows, build the server from PowerShell with:
 git clone https://github.com/amirhasanzadehpy/Pogo.git
 Set-Location Pogo
 New-Item -ItemType Directory -Force build | Out-Null
-go build -tags="grammar_subset,grammar_subset_python" -o build/django-orm-lsp.exe ./cmd/django-orm-lsp
-.\build\django-orm-lsp.exe -version
+go build -tags="grammar_subset,grammar_subset_python" -o build/pogo.exe ./cmd/pogo
+.\build\pogo.exe -version
 ```
 
 ## Editor Setup
@@ -113,7 +113,7 @@ go build -tags="grammar_subset,grammar_subset_python" -o build/django-orm-lsp.ex
 ### VS Code
 
 Pogo's VS Code extension starts one server for each Python workspace folder,
-finds `django-orm-lsp` on the extension host's `PATH`, and reports a direct
+finds `pogo` on the extension host's `PATH`, and reports a direct
 download action when the binary is missing.
 
 Install the release VSIX from a terminal:
@@ -140,22 +140,35 @@ Django project's `.vscode/settings.json`:
 
 ```json
 {
-  "pogo.executablePath": "/absolute/path/to/Pogo/build/django-orm-lsp"
+  "pogo.executablePath": "/absolute/path/to/Pogo/build/pogo"
 }
 ```
 
 Relative paths are resolved from each Django workspace folder, so
-`"build/django-orm-lsp"` is valid only when that binary is inside the project.
+`"build/pogo"` is valid only when that binary is inside the project.
 On Windows, use the `.exe` path. For projects whose environment is ambiguous,
 all available overrides are:
 
 ```json
 {
-  "pogo.executablePath": "/absolute/path/to/django-orm-lsp",
+  "pogo.executablePath": "/absolute/path/to/pogo",
   "pogo.pythonPath": ".venv/bin/python",
-  "pogo.settingsModule": "config.settings"
+  "pogo.settingsModule": "config.settings",
+  "pogo.envFile": ".env",
+  "pogo.environment": {
+    "DEBUG": null
+  }
 }
 ```
+
+The server environment starts with the VS Code extension host environment.
+Values from `pogo.envFile` override inherited values, then
+`pogo.environment` wins. Set a key to `null` to remove an inherited variable.
+This is useful when editor tooling exports a generic variable such as `DEBUG`
+that has different meaning in the Django project.
+Do not put credentials directly in `pogo.environment`: workspace settings may
+be committed and user settings may be synchronized. Keep secrets in an ignored,
+permission-restricted dotenv file and reference it with `pogo.envFile`.
 
 In Remote SSH, WSL, Dev Containers, and Codespaces, install the binary or set
 the executable path on the remote extension host, not the local desktop.
@@ -167,7 +180,7 @@ Current `nvim-lspconfig` uses Neovim's built-in configuration API. With Neovim
 
 ```lua
 vim.lsp.config("pogo", {
-  cmd = { "django-orm-lsp" },
+  cmd = { "pogo" },
   filetypes = { "python" },
   root_markers = { "manage.py", "pyproject.toml", ".git" },
 })
@@ -185,7 +198,7 @@ return {
     ft = { "python" },
     config = function()
       vim.lsp.config("pogo", {
-        cmd = { "django-orm-lsp" },
+        cmd = { "pogo" },
         filetypes = { "python" },
         root_markers = { "manage.py", "pyproject.toml", ".git" },
       })
@@ -199,14 +212,14 @@ return {
 For a local build, replace the command with an absolute path:
 
 ```lua
-cmd = { "/absolute/path/to/Pogo/build/django-orm-lsp" }
+cmd = { "/absolute/path/to/Pogo/build/pogo" }
 ```
 
 Only add initialization overrides when automatic discovery is insufficient:
 
 ```lua
 vim.lsp.config("pogo", {
-  cmd = { "django-orm-lsp" },
+  cmd = { "pogo" },
   filetypes = { "python" },
   root_markers = { "manage.py", "pyproject.toml", ".git" },
   init_options = {
@@ -241,7 +254,7 @@ Open **Zed: Open Settings**, then add:
   "lsp": {
     "pyright": {
       "binary": {
-        "path": "/home/you/.local/bin/django-orm-lsp",
+        "path": "/home/you/.local/bin/pogo",
         "arguments": []
       }
     }
@@ -250,8 +263,8 @@ Open **Zed: Open Settings**, then add:
 ```
 
 Change `binary.path` to the absolute installation path. On macOS that is often
-`/Users/you/.local/bin/django-orm-lsp`; on Windows, JSON paths use escaped
-backslashes such as `C:\\Users\\you\\.local\\bin\\django-orm-lsp.exe`.
+`/Users/you/.local/bin/pogo`; on Windows, JSON paths use escaped
+backslashes such as `C:\\Users\\you\\.local\\bin\\pogo.exe`.
 
 To keep separate Python type checking, install another registered Python server
 such as BasedPyright and list it after the bridge:
@@ -266,7 +279,7 @@ such as BasedPyright and list it after the bridge:
   "lsp": {
     "pyright": {
       "binary": {
-        "path": "/home/you/.local/bin/django-orm-lsp",
+        "path": "/home/you/.local/bin/pogo",
         "arguments": [
           "-python",
           "/absolute/path/to/project/.venv/bin/python",
@@ -358,15 +371,15 @@ rename, references, imports, and formatting.
 Confirm the editor can see the executable:
 
 ```sh
-command -v django-orm-lsp
-django-orm-lsp -version
+command -v pogo
+pogo -version
 ```
 
 On Windows:
 
 ```powershell
-Get-Command django-orm-lsp.exe
-django-orm-lsp.exe -version
+Get-Command pogo.exe
+pogo.exe -version
 ```
 
 Desktop applications, especially on macOS, may not inherit your interactive
@@ -382,6 +395,8 @@ guessed data. Check that:
 - The selected Python interpreter has Django and project dependencies installed.
 - The workspace root contains the Django project.
 - The settings module resolves using the precedence table above.
+- Any environment setup normally performed by `manage.py` is represented by
+  `pogo.envFile` and `pogo.environment` in VS Code.
 - Importing the project does not raise an exception.
 
 In VS Code, open **View > Output** and select **Pogo**. In Neovim, run

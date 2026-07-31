@@ -43,7 +43,7 @@
           "type": "string",
           "default": "",
           "scope": "resource",
-          "markdownDescription": "Path to the `django-orm-lsp` executable. Relative paths are resolved against the workspace folder. Leave empty to search the extension host's `PATH`."
+          "markdownDescription": "Path to the `pogo` executable. Relative paths are resolved against the workspace folder. Leave empty to search the extension host's `PATH`."
         },
         "pogo.pythonPath": {
           "type": "string",
@@ -56,6 +56,24 @@
           "default": "",
           "scope": "resource",
           "markdownDescription": "Django settings module, such as `config.settings`. Leave empty to use Pogo's environment and project discovery."
+        },
+        "pogo.envFile": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Dotenv file loaded into the Pogo server and Django worker environment. Relative paths are resolved against the workspace folder. Values override the extension host environment."
+        },
+        "pogo.environment": {
+          "type": "object",
+          "default": {},
+          "scope": "resource",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "markdownDescription": "Environment overrides for the Pogo server and Django worker. String values override inherited and dotenv values; `null` removes an inherited variable. Do not store secrets in settings; use a protected `pogo.envFile`."
         }
       }
     }
@@ -68,6 +86,7 @@
     "package": "vsce package --skip-license"
   },
   "dependencies": {
+    "dotenv": "17.4.2",
     "vscode-languageclient": "10.1.0"
   },
   "devDependencies": {

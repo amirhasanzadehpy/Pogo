@@ -32,7 +32,7 @@ jobs:
       - run: make fixture-env FIXTURE_CONSTRAINTS=testdata/sample_django_project/constraints-django${{ matrix.django }}.txt
       - run: make test
       - run: make build
-      - run: build/testclient -scenario testdata/requests/worker-lifecycle.json -- build/django-orm-lsp -project testdata/sample_django_project -settings sample_project.settings -python .venv-fixture/bin/python
+      - run: build/testclient -scenario testdata/requests/worker-lifecycle.json -- build/pogo -project testdata/sample_django_project -settings sample_project.settings -python .venv-fixture/bin/python
 
   race:
     runs-on: ubuntu-latest
@@ -71,7 +71,7 @@ jobs:
           EXTRA=()
           if [[ "$RUNNER_OS" == "macOS" ]]; then EXTRA=(-ldflags=-linkmode=external); fi
           go test -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" ./...
-          go build -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" ./cmd/django-orm-lsp ./cmd/testclient
+          go build -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" ./cmd/pogo ./cmd/testclient
 
   cross-build:
     runs-on: ubuntu-latest
@@ -80,8 +80,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/django-orm-lsp ./cmd/testclient
-      - run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/django-orm-lsp ./cmd/testclient
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/pogo ./cmd/testclient
+      - run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/pogo ./cmd/testclient
       - run: make release-check
 
   performance-gates:

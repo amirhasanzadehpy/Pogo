@@ -43,7 +43,7 @@
             "documentLinkProvider": {}
           },
           "serverInfo": {
-            "name": "django-orm-lsp",
+            "name": "pogo",
             "version": "0.1.0"
           }
         }

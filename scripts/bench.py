@@ -102,7 +102,7 @@ def main() -> int:
     )
     rss_command = [
         "build/testclient", "-format", "json",
-        "-scenario", "testdata/requests/worker-lifecycle.json", "--", "build/django-orm-lsp",
+        "-scenario", "testdata/requests/worker-lifecycle.json", "--", "build/pogo",
         "-project", "testdata/sample_django_project", "-settings", "sample_project.settings", "-python", str(fixture_python),
     ]
     rss_text = run(rss_command, root, raw / "rss.json", stdout_json=True)

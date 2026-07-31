@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -97,6 +98,87 @@ func TestManagerAndInstanceCompletion(t *testing.T) {
 				t.Errorf("completion item %d = %q, want %q", itemIndex, completion.Items[itemIndex].Label, expected)
 			}
 		}
+	}
+}
+
+func TestModelSelfRelationChainCompletionAndHover(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///project/myapp/models.py"
+	completionSource, completionPosition := lspSourceAtCursor(t, "class Book:\n    def profile_name(self):\n        return self.author.profile.dis|")
+	if err := features.documents.Open(uri, 1, string(completionSource)); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := features.Completion(uri, completionPosition)
+	if err != nil || completion == nil || len(completion.Items) != 1 || completion.Items[0].Label != "display_name" {
+		t.Fatalf("Completion() = %#v, %v", completion, err)
+	}
+
+	hoverSource, hoverPosition := lspSourceAtCursor(t, "class Book:\n    def profile_name(self):\n        return self.author.profile.display_na|me")
+	if err := features.documents.Change(uri, 2, []analysis.Change{{Text: string(hoverSource)}}); err != nil {
+		t.Fatal(err)
+	}
+	hover, err := features.Hover(uri, hoverPosition)
+	if err != nil || hover == nil {
+		t.Fatalf("Hover() = %#v, %v", hover, err)
+	}
+	markup, ok := hover.Contents.(protocol.MarkupContent)
+	if !ok || !strings.Contains(markup.Value, "**display\\_name**") {
+		t.Fatalf("hover contents = %#v", hover.Contents)
+	}
+}
+
+func TestModelSelfInferenceUsesFilePathResolvedAtOpen(t *testing.T) {
+	root := t.TempDir()
+	realPath := filepath.Join(root, "models.py")
+	aliasPath := filepath.Join(root, "models-link.py")
+	if err := os.WriteFile(realPath, []byte("# model source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realPath, aliasPath); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	model := featureTestModel("Book", map[string]schema.Field{
+		"title": featureTestField("myapp.Book", "title", "django.db.models.fields.CharField"),
+	})
+	model.FilePath = realPath
+	modelRange := *model.SourceRange
+	modelRange.FilePath = realPath
+	model.SourceRange = &modelRange
+	graph, err := schema.Build(schema.Snapshot{
+		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		Apps: map[string]schema.App{"myapp": {
+			Label: "myapp", ImportName: "myapp", RootPath: root, Models: map[string]schema.Model{"Book": model},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &schema.Cache{}
+	cache.Replace(graph)
+	features, err := NewFeatures(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer features.Close()
+	uri := (&url.URL{Scheme: "file", Path: aliasPath}).String()
+	source, position := lspSourceAtCursor(t, "class Book:\n    def title(self):\n        return self.ti|")
+	if err := features.didOpen(nil, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{
+		URI: protocol.DocumentUri(uri), LanguageID: "python", Version: 1, Text: string(source),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := features.documents.Snapshot(uri)
+	resolvedPath, err := filepath.EvalSymlinks(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.FilePath != resolvedPath {
+		t.Fatalf("cached file path = %q, want %q", snapshot.FilePath, resolvedPath)
+	}
+	completion, err := features.Completion(uri, position)
+	if err != nil || completion == nil || len(completion.Items) != 1 || completion.Items[0].Label != "title" {
+		t.Fatalf("Completion() through symlink = %#v, %v", completion, err)
 	}
 }
 

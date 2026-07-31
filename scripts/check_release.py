@@ -42,7 +42,7 @@ def main() -> int:
         raise RuntimeError("usage: check_release.py BINARY [BINARY...]")
     check_worker(root)
     dependencies = subprocess.check_output(
-        ["go", "list", "-deps", "-tags=grammar_subset,grammar_subset_python", "./cmd/django-orm-lsp"],
+        ["go", "list", "-deps", "-tags=grammar_subset,grammar_subset_python", "./cmd/pogo"],
         cwd=root,
         text=True,
     ).splitlines()

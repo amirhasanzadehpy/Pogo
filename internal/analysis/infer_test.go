@@ -114,6 +114,68 @@ func TestAnalyzeSyntaxInfersAnnotatedParameter(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSyntaxFileTraversesSingleValuedRelationsFromModelSelf(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	tests := []struct {
+		name   string
+		source string
+		model  string
+	}{
+		{"forward relation", "class Book:\n    def author_name(self):\n        return self.author.na|", "myapp.Author"},
+		{"reverse one-to-one chain", "class Book:\n    def profile_bio(self):\n        return self.author.profile.bi|", "myapp.Profile"},
+		{"annotated instance chain", "from myapp.models import Book\nbook: Book\nbook.author.profile.bi|", "myapp.Profile"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			source, offset := sourceAtCursor(t, test.source)
+			if err := store.Open("file:///project/myapp/models.py", 1, string(source)); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
+			context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, "/project/myapp/models.py")
+			if !ok || context.Kind != ContextInstanceMember || context.Value.CanonicalLabel != test.model {
+				t.Fatalf("AnalyzeSyntaxFile() = %#v, %v; syntax=%#v", context, ok, snapshot.Syntax)
+			}
+		})
+	}
+}
+
+func TestAnalyzeSyntaxFileDoesNotTreatRelatedManagersAsInstances(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	for _, sourceWithCursor := range []string{
+		"class Author:\n    def title(self):\n        return self.books.ti|",
+		"class Book:\n    def invalid(self):\n        self = object()\n        return self.author.na|",
+		"class Book:\n    def invalid(other, self):\n        return self.author.na|",
+		"class Book:\n    @staticmethod\n    def invalid(self):\n        return self.author.na|",
+		"class Book:\n    @classmethod\n    def invalid(self):\n        return self.author.na|",
+	} {
+		store := newTestStore(t)
+		source, offset := sourceAtCursor(t, sourceWithCursor)
+		if err := store.Open("file:///project/myapp/models.py", 1, string(source)); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
+		if context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, "/project/myapp/models.py"); ok {
+			t.Fatalf("unsafe relation inference = %#v", context)
+		}
+	}
+}
+
+func TestAnalyzeSyntaxFileUsesNestedModelQualname(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	store := newTestStore(t)
+	source, offset := sourceAtCursor(t, "class Namespace:\n    class Nested:\n        def value(self):\n            return self.na|")
+	if err := store.Open("file:///project/myapp/models.py", 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
+	context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, "/project/myapp/models.py")
+	if !ok || context.Kind != ContextInstanceMember || context.Value.CanonicalLabel != "myapp.Nested" {
+		t.Fatalf("nested AnalyzeSyntaxFile() = %#v, %v", context, ok)
+	}
+}
+
 func TestAnalyzeSyntaxParameterDoesNotOverrideLaterAssignment(t *testing.T) {
 	graph := inferenceTestGraph(t)
 	for _, sourceWithCursor := range []string{
@@ -208,31 +270,65 @@ func sourceAtCursor(t *testing.T, value string) ([]byte, int) {
 
 func inferenceTestGraph(t *testing.T) *schema.Graph {
 	t.Helper()
-	related := "myapp.Author"
+	authorLabel := "myapp.Author"
+	bookLabel := "myapp.Book"
+	profileLabel := "myapp.Profile"
 	attname := "author_id"
 	forward := "forward"
+	reverse := "reverse"
+	manyToOne := "many-to-one"
+	oneToMany := "one-to-many"
+	oneToOne := "one-to-one"
+	profileAccessor := "profile"
+	profileQuery := "profile"
+	booksAccessor := "books"
+	bookQuery := "book"
 	models := map[string]schema.Model{
 		"Author": testModel("Author", map[string]schema.Field{
 			"id":   testField("myapp.Author", "id", "django.db.models.fields.BigAutoField"),
 			"name": testField("myapp.Author", "name", "django.db.models.fields.CharField"),
+			"profile": {
+				Type: "django.db.models.fields.reverse_related.OneToOneRel", InternalType: "OneToOneRel", Name: "profile",
+				IsRelation: true, RelatedModel: &profileLabel, SourceModel: "myapp.Profile", SourceRange: testSourceRangeAt(20),
+				RelationDirection: &reverse, RelationCardinality: &oneToOne, AccessorName: &profileAccessor, QueryName: &profileQuery,
+			},
+			"book": {
+				Type: "django.db.models.fields.reverse_related.ManyToOneRel", InternalType: "ManyToOneRel", Name: "book",
+				IsRelation: true, RelatedModel: &bookLabel, SourceModel: "myapp.Book", SourceRange: testSourceRange(),
+				RelationDirection: &reverse, RelationCardinality: &oneToMany, AccessorName: &booksAccessor, QueryName: &bookQuery,
+			},
 		}),
 		"Book": testModel("Book", map[string]schema.Field{
 			"id":    testField("myapp.Book", "id", "django.db.models.fields.BigAutoField"),
 			"title": testField("myapp.Book", "title", "django.db.models.fields.CharField"),
 			"café":  testField("myapp.Book", "café", "django.db.models.fields.CharField"),
 			"author": {
-				Type:              "django.db.models.fields.related.ForeignKey",
-				InternalType:      "ForeignKey",
-				Name:              "author",
-				Attname:           &attname,
-				IsRelation:        true,
-				RelatedModel:      &related,
-				SourceModel:       "myapp.Book",
-				SourceRange:       testSourceRange(),
-				RelationDirection: &forward,
+				Type:                "django.db.models.fields.related.ForeignKey",
+				InternalType:        "ForeignKey",
+				Name:                "author",
+				Attname:             &attname,
+				IsRelation:          true,
+				RelatedModel:        &authorLabel,
+				SourceModel:         "myapp.Book",
+				SourceRange:         testSourceRangeAt(10),
+				RelationDirection:   &forward,
+				RelationCardinality: &manyToOne,
 			},
 		}),
+		"Profile": testModel("Profile", map[string]schema.Field{
+			"id": testField("myapp.Profile", "id", "django.db.models.fields.BigAutoField"),
+			"bio": func() schema.Field {
+				field := testField("myapp.Profile", "bio", "django.db.models.fields.TextField")
+				field.SourceRange = testSourceRangeAt(30)
+				return field
+			}(),
+		}),
 	}
+	nested := testModel("Nested", map[string]schema.Field{
+		"name": testField("myapp.Nested", "name", "django.db.models.fields.CharField"),
+	})
+	nested.Qualname = "Namespace.Nested"
+	models["Nested"] = nested
 	graph, err := schema.Build(schema.Snapshot{
 		SchemaVersion:           1,
 		PositionEncoding:        "utf-8-bytes",
@@ -277,10 +373,14 @@ func testField(sourceModel, name, fieldType string) schema.Field {
 }
 
 func testSourceRange() *schema.SourceRange {
+	return testSourceRangeAt(1)
+}
+
+func testSourceRangeAt(line int) *schema.SourceRange {
 	return &schema.SourceRange{
 		FilePath:     "/project/myapp/models.py",
 		SourceDigest: strings.Repeat("0", 64),
-		Start:        schema.Position{Line: 1},
-		End:          schema.Position{Line: 1, Column: 1},
+		Start:        schema.Position{Line: line},
+		End:          schema.Position{Line: line, Column: 1},
 	}
 }

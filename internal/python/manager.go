@@ -70,6 +70,7 @@ type Manager struct {
 }
 
 const schemaRefreshDebounce = 300 * time.Millisecond
+const defaultSchemaLoadTimeout = 90 * time.Second
 
 var errWorkerCleanup = errors.New("worker cleanup failed")
 
@@ -102,7 +103,7 @@ func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, er
 		config.ConnectTimeout = 5 * time.Second
 	}
 	if config.RequestTimeout <= 0 {
-		config.RequestTimeout = 30 * time.Second
+		config.RequestTimeout = defaultSchemaLoadTimeout
 	}
 	if config.ShutdownTimeout <= 0 {
 		config.ShutdownTimeout = time.Second

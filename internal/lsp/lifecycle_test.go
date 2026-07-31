@@ -31,11 +31,17 @@ func TestLifecycleTransitions(t *testing.T) {
 	if !ok {
 		t.Fatalf("initialize result type = %T", result)
 	}
-	if initializeResult.ServerInfo == nil || initializeResult.ServerInfo.Name != ServerName {
+	if initializeResult.ServerInfo == nil || initializeResult.ServerInfo.Name != "pogo" || ServerName != "pogo" {
 		t.Fatalf("server info = %#v", initializeResult.ServerInfo)
 	}
 	if _, _, _, err := lifecycle.Handle(initializeContext(t)); err == nil {
 		t.Fatal("duplicate initialize error = nil")
+	}
+	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodCancelRequest, Params: json.RawMessage(`{"id":1}`)}); err != nil || !validMethod || !validParams {
+		t.Fatalf("cancel initialize request = (%v, %v, %v)", validMethod, validParams, err)
+	}
+	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodSetTrace, Params: json.RawMessage(`{"value":"off"}`)}); err != nil || !validMethod || !validParams {
+		t.Fatalf("set trace = (%v, %v, %v)", validMethod, validParams, err)
 	}
 	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: "pogo/beforeInitialized"}); err == nil {
 		t.Fatal("request before initialized notification error = nil")
@@ -47,6 +53,9 @@ func TestLifecycleTransitions(t *testing.T) {
 	}
 	if _, validMethod, _, err := lifecycle.Handle(&glsp.Context{Method: "pogo/unknown", Params: json.RawMessage(`{}`)}); err != nil || validMethod {
 		t.Fatalf("unknown method = (validMethod %v, error %v), want framework method error", validMethod, err)
+	}
+	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodCancelRequest, Params: json.RawMessage(`{"id":1}`)}); err != nil || !validMethod || !validParams {
+		t.Fatalf("cancel request = (%v, %v, %v)", validMethod, validParams, err)
 	}
 	if _, _, _, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodShutdown}); err != nil {
 		t.Fatalf("shutdown error = %v", err)

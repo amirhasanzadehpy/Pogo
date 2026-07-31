@@ -37,6 +37,33 @@ func TestResolveDefinitionSyntaxAcrossORMReferences(t *testing.T) {
 	}
 }
 
+func TestResolveDefinitionSyntaxFileAcrossModelSelfRelationChain(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	for _, test := range []struct {
+		source string
+		line   int
+	}{
+		{"class Book:\n    def profile(self):\n        return self.au|thor.profile.bio", 10},
+		{"class Book:\n    def profile(self):\n        return self.author.pro|file.bio", 20},
+		{"class Book:\n    def profile(self):\n        return self.author.profile.bi|o", 30},
+	} {
+		source, offset := sourceAtCursor(t, test.source)
+		store, err := NewStore()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Open("file:///project/myapp/models.py", 1, string(source)); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
+		sourceRange, ok := ResolveDefinitionSyntaxFile(source, offset, graph, snapshot.Syntax, "/project/myapp/models.py")
+		store.CloseAll()
+		if !ok || sourceRange.FilePath != "/project/myapp/models.py" || sourceRange.Start.Line != test.line {
+			t.Fatalf("ResolveDefinitionSyntaxFile(%q) = %#v, %v", test.source, sourceRange, ok)
+		}
+	}
+}
+
 func TestResolveDefinitionSyntaxRejectsUnknownReferences(t *testing.T) {
 	graph := inferenceTestGraph(t)
 	for _, sourceWithCursor := range []string{

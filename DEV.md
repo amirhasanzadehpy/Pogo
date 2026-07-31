@@ -47,14 +47,14 @@ position/edit conversion, ORM path extraction, and parser recovery. `make
 compat` creates isolated temporary environments and runs the fixture and worker
 suites against the pinned Django 4.2 and 5.2 profiles for the current Python.
 
-`make build` writes `build/django-orm-lsp` and `build/testclient`. Run a traced
+`make build` writes `build/pogo` and `build/testclient`. Run a traced
 lifecycle scenario with logs isolated from protocol stdout:
 
 ```sh
 build/testclient \
   -scenario testdata/requests/normal-shutdown.json \
   -trace-methods \
-  -- build/django-orm-lsp -log-file build/protocol.log
+  -- build/pogo -log-file build/protocol.log
 ```
 
 Dump the fixture's runtime ORM schema as deterministic compact JSON:
@@ -72,7 +72,7 @@ output.
 Run the language server with the authenticated schema worker enabled:
 
 ```sh
-build/django-orm-lsp \
+build/pogo \
   -project testdata/sample_django_project \
   -settings sample_project.settings \
   -python .venv-fixture/bin/python \
@@ -240,8 +240,8 @@ also requires `-ldflags=-linkmode=external`. Run:
 
 ```sh
 make build
-python3 scripts/check_release.py build/django-orm-lsp build/testclient
-go version -m build/django-orm-lsp
+python3 scripts/check_release.py build/pogo build/testclient
+go version -m build/pogo
 ```
 
 The inspection rejects fixture markers in release binaries, rejects production
@@ -259,8 +259,8 @@ make test-race
 make fuzz
 make compat
 make bench
-python3 scripts/check_release.py build/django-orm-lsp build/testclient
-build/testclient -scenario testdata/requests/normal-shutdown.json -- build/django-orm-lsp
+python3 scripts/check_release.py build/pogo build/testclient
+build/testclient -scenario testdata/requests/normal-shutdown.json -- build/pogo
 ```
 
 Also copy the sample project outside the exported source tree and run the

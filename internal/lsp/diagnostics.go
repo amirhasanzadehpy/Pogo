@@ -9,7 +9,7 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-const diagnosticSource = "django-orm-lsp"
+const diagnosticSource = "pogo"
 
 func (features *Features) setNotifier(ctx *glsp.Context) {
 	if features == nil || ctx == nil || ctx.Notify == nil {

@@ -27,10 +27,11 @@ const (
 )
 
 type Graph struct {
-	snapshot  Snapshot
-	canonical map[string]*modelIndex
-	classPath map[string]*modelIndex
-	module    map[string][]*modelIndex
+	snapshot    Snapshot
+	canonical   map[string]*modelIndex
+	classPath   map[string]*modelIndex
+	sourceClass map[string]*modelIndex
+	module      map[string][]*modelIndex
 }
 
 type modelIndex struct {
@@ -147,10 +148,11 @@ func Build(snapshot Snapshot) (*Graph, error) {
 	}
 
 	graph := &Graph{
-		snapshot:  snapshot,
-		canonical: make(map[string]*modelIndex),
-		classPath: make(map[string]*modelIndex),
-		module:    make(map[string][]*modelIndex),
+		snapshot:    snapshot,
+		canonical:   make(map[string]*modelIndex),
+		classPath:   make(map[string]*modelIndex),
+		sourceClass: make(map[string]*modelIndex),
+		module:      make(map[string][]*modelIndex),
 	}
 	for appKey, app := range snapshot.Apps {
 		if appKey == "" || app.Label != appKey || app.ImportName == "" || app.RootPath == "" || !filepath.IsAbs(app.RootPath) {
@@ -173,6 +175,17 @@ func Build(snapshot Snapshot) (*Graph, error) {
 			}
 			graph.canonical[model.CanonicalLabel] = index
 			graph.classPath[classPath] = index
+			sourcePaths := []string{model.FilePath}
+			if resolved := resolvedPath(model.FilePath); !samePath(filepath.Clean(model.FilePath), resolved) {
+				sourcePaths = append(sourcePaths, resolved)
+			}
+			for _, sourcePath := range sourcePaths {
+				sourceClass := sourceClassKey(sourcePath, model.Qualname)
+				if existing := graph.sourceClass[sourceClass]; existing != nil && existing != index {
+					return nil, fmt.Errorf("duplicate model source class %s in %q", model.Qualname, model.FilePath)
+				}
+				graph.sourceClass[sourceClass] = index
+			}
 			graph.module[model.Module] = append(graph.module[model.Module], index)
 		}
 	}
@@ -256,6 +269,14 @@ func samePath(left, right string) bool {
 		return strings.EqualFold(left, right)
 	}
 	return left == right
+}
+
+func sourceClassKey(filePath, qualname string) string {
+	filePath = filepath.Clean(filePath)
+	if runtime.GOOS == "windows" {
+		filePath = strings.ToLower(filePath)
+	}
+	return filePath + "\x00" + qualname
 }
 
 func pathWithin(root, candidate string) bool {
@@ -717,6 +738,17 @@ func (graph *Graph) CanonicalLabelForClass(classPath string) (string, bool) {
 		return "", false
 	}
 	index := graph.classPath[classPath]
+	if index == nil {
+		return "", false
+	}
+	return index.model.CanonicalLabel, true
+}
+
+func (graph *Graph) CanonicalLabelForSourceClass(filePath, qualname string) (string, bool) {
+	if graph == nil || filePath == "" || qualname == "" {
+		return "", false
+	}
+	index := graph.sourceClass[sourceClassKey(filePath, qualname)]
 	if index == nil {
 		return "", false
 	}

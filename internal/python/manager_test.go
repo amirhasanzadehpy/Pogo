@@ -18,6 +18,31 @@ import (
 	"github.com/amirhasanzadehpy/Pogo/internal/schema"
 )
 
+func TestManagerDefaultSchemaLoadTimeoutSupportsLargeColdProjects(t *testing.T) {
+	manager, err := NewManager(Config{ProjectRoot: t.TempDir()}, &schema.Cache{}, nil)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	if manager.config.RequestTimeout != defaultSchemaLoadTimeout {
+		t.Fatalf("request timeout = %s, want %s", manager.config.RequestTimeout, defaultSchemaLoadTimeout)
+	}
+	if manager.config.ConnectTimeout != 5*time.Second {
+		t.Fatalf("connect timeout = %s, want 5s", manager.config.ConnectTimeout)
+	}
+	if manager.config.ShutdownTimeout != time.Second {
+		t.Fatalf("shutdown timeout = %s, want 1s", manager.config.ShutdownTimeout)
+	}
+
+	const override = 17 * time.Second
+	overridden, err := NewManager(Config{ProjectRoot: t.TempDir(), RequestTimeout: override}, &schema.Cache{}, nil)
+	if err != nil {
+		t.Fatalf("NewManager() with override error = %v", err)
+	}
+	if overridden.config.RequestTimeout != override {
+		t.Fatalf("overridden request timeout = %s, want %s", overridden.config.RequestTimeout, override)
+	}
+}
+
 func TestManagerLoadsFixtureAndCleansRuntime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Python process integration in short mode")
