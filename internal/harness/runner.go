@@ -192,7 +192,7 @@ func RunScenario(parent context.Context, scenario Scenario, command []string, tr
 			if err != nil {
 				return result, fmt.Errorf("step %d: %w", index+1, err)
 			}
-			if !errors.Is(event.err, io.EOF) {
+			if !errors.Is(event.err, io.EOF) && !errors.Is(event.err, os.ErrClosed) {
 				if event.err != nil {
 					return result, fmt.Errorf("step %d: expected clean stdout EOF: %w", index+1, event.err)
 				}
