@@ -105,11 +105,6 @@ func RunScenario(parent context.Context, scenario Scenario, command []string, tr
 		cancel()
 		if !waited {
 			_ = stdin.Close()
-			if cmd.Process != nil {
-				if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
-					joinCleanupError(fmt.Errorf("kill server: %w", killErr))
-				}
-			}
 			select {
 			case <-waitDone:
 				waited = true
