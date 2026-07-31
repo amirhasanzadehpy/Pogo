@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 	"unicode/utf8"
@@ -276,7 +277,7 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	models["Book"] = bookModel
 	graph, err := schema.Build(schema.Snapshot{
 		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
-		Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: "/project/myapp", Models: models}},
+		Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(inferenceTestModelPath()), Models: models}},
 	})
 	if err != nil {
 		t.Fatalf("schema.Build() error = %v", err)

@@ -3,7 +3,6 @@ package lsp
 import (
 	"context"
 	"encoding/json"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -332,7 +331,7 @@ func TestDidSaveReparsesPublishesAndSchedulesWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "queries.py")
-	uri := (&url.URL{Scheme: "file", Path: path}).String()
+	uri := mustSourceFileURI(t, path)
 	invalid := "from myapp.models import Book\nBook.objects.filter(missing=1)\n"
 	openParams, _ := json.Marshal(protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{
 		URI: protocol.DocumentUri(uri), LanguageID: "python", Version: 1, Text: invalid,

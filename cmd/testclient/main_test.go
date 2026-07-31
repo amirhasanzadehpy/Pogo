@@ -15,8 +15,8 @@ import (
 func TestLifecycleScenarios(t *testing.T) {
 	root := repositoryRoot(t)
 	temp := t.TempDir()
-	serverPath := filepath.Join(temp, "pogo")
-	clientPath := filepath.Join(temp, "testclient")
+	serverPath := executablePath(temp, "pogo")
+	clientPath := executablePath(temp, "testclient")
 	buildCommand(t, root, serverPath, "./cmd/pogo")
 	buildCommand(t, root, clientPath, "./cmd/testclient")
 
@@ -76,6 +76,13 @@ func TestLifecycleScenarios(t *testing.T) {
 	if !bytes.Contains(workerLog, []byte("schema cache generation=1 models=7")) {
 		t.Fatalf("worker log has no loaded schema generation:\n%s", workerLog)
 	}
+}
+
+func executablePath(directory, name string) string {
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(directory, name)
 }
 
 func fixturePython(root string) string {

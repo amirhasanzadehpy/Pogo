@@ -24,6 +24,18 @@ class Book(models.Model):
     title = models.CharField()
 `
 
+func TestSourceFileURIRoundTripsNativePath(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "model with space.py")
+	uri := mustSourceFileURI(t, want)
+	got, ok := localFilePath(uri)
+	if !ok || got != filepath.Clean(want) {
+		t.Fatalf("localFilePath(%q) = %q, %v; want %q", uri, got, ok, want)
+	}
+	if got, ok := localFilePath("file://"); ok || got != "" {
+		t.Fatalf("localFilePath(file://) = %q, %v", got, ok)
+	}
+}
+
 func TestDefinitionReturnsExactSchemaLocations(t *testing.T) {
 	features, modelsPath := navigationTestFeatures(t)
 	defer features.Close()
@@ -53,7 +65,7 @@ func TestDefinitionReturnsExactSchemaLocations(t *testing.T) {
 			if err != nil || location == nil {
 				t.Fatalf("Definition() = %#v, %v", location, err)
 			}
-			wantURI := protocol.DocumentUri((&url.URL{Scheme: "file", Path: modelsPath}).String())
+			wantURI := protocol.DocumentUri(mustSourceFileURI(t, modelsPath))
 			if location.URI != wantURI || location.Range != test.want {
 				t.Fatalf("Definition() = %#v, want URI %s range %#v", location, wantURI, test.want)
 			}
@@ -102,7 +114,11 @@ func TestNavigationRejectsStaleSchemaSource(t *testing.T) {
 func TestDefinitionRejectsUnsavedTargetChanges(t *testing.T) {
 	features, modelsPath := navigationTestFeatures(t)
 	defer features.Close()
-	modelsURL := &url.URL{Scheme: "file", Host: "localhost", Path: modelsPath}
+	modelsURL, err := url.Parse(mustSourceFileURI(t, modelsPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelsURL.Host = "localhost"
 	modelsURI := modelsURL.String()
 	if err := features.documents.Open(modelsURI, 1, "# unsaved\n"+navigationModelsSource); err != nil {
 		t.Fatal(err)
@@ -137,7 +153,7 @@ func TestDocumentLinksResolveQueryPathsAndRelationStrings(t *testing.T) {
 		{Start: protocol.Position{Line: 1, Character: 37}, End: protocol.Position{Line: 1, Character: 42}},
 		{Start: protocol.Position{Line: 1, Character: 44}, End: protocol.Position{Line: 1, Character: 49}},
 	}
-	wantURI := protocol.DocumentUri((&url.URL{Scheme: "file", Path: modelsPath}).String())
+	wantURI := protocol.DocumentUri(mustSourceFileURI(t, modelsPath))
 	for index, link := range links {
 		if link.Range != wantRanges[index] || link.Target == nil || *link.Target != wantURI {
 			t.Errorf("link %d = %#v", index, link)
@@ -177,7 +193,7 @@ func TestDocumentLinksRecognizeImportedRelationConstructor(t *testing.T) {
 	source = strings.Replace(source, "models.ForeignKey", "FK", 1)
 	features, modelsPath := navigationTestFeaturesWithSource(t, source)
 	defer features.Close()
-	uri := string(protocol.DocumentUri((&url.URL{Scheme: "file", Path: modelsPath}).String()))
+	uri := mustSourceFileURI(t, modelsPath)
 	if err := features.documents.Open(uri, 1, source); err != nil {
 		t.Fatal(err)
 	}

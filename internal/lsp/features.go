@@ -72,9 +72,13 @@ func (features *Features) didOpen(ctx *glsp.Context, params *protocol.DidOpenTex
 	}
 	features.setNotifier(ctx)
 	uri := string(params.TextDocument.URI)
-	filePath, _ := localFilePath(uri)
-	if resolved, err := filepath.EvalSymlinks(filePath); err == nil {
-		filePath = resolved
+	filePath, validPath := localFilePath(uri)
+	if validPath {
+		if resolved, err := filepath.EvalSymlinks(filePath); err == nil {
+			filePath = resolved
+		}
+	} else {
+		filePath = ""
 	}
 	if err := features.documents.OpenFile(uri, filePath, int32(params.TextDocument.Version), params.TextDocument.Text); err != nil {
 		return err

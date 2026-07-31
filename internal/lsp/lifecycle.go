@@ -282,7 +282,10 @@ func localFilePath(uri string) (string, bool) {
 			path = path[1:]
 		}
 		path = filepath.FromSlash(path)
-		return filepath.Clean(path), path != ""
+		if path == "" {
+			return "", false
+		}
+		return filepath.Clean(path), true
 	}
 	if parsed.Host != "" && parsed.Host != "localhost" {
 		return "", false

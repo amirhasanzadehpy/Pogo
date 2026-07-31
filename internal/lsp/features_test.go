@@ -3,7 +3,6 @@ package lsp
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -104,7 +103,7 @@ func TestManagerAndInstanceCompletion(t *testing.T) {
 func TestModelSelfRelationChainCompletionAndHover(t *testing.T) {
 	features := testFeatures(t)
 	defer features.Close()
-	uri := "file:///project/myapp/models.py"
+	uri := mustSourceFileURI(t, featureTestModelPath())
 	completionSource, completionPosition := lspSourceAtCursor(t, "class Book:\n    def profile_name(self):\n        return self.author.profile.dis|")
 	if err := features.documents.Open(uri, 1, string(completionSource)); err != nil {
 		t.Fatal(err)
@@ -161,7 +160,7 @@ func TestModelSelfInferenceUsesFilePathResolvedAtOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer features.Close()
-	uri := (&url.URL{Scheme: "file", Path: aliasPath}).String()
+	uri := mustSourceFileURI(t, aliasPath)
 	source, position := lspSourceAtCursor(t, "class Book:\n    def title(self):\n        return self.ti|")
 	if err := features.didOpen(nil, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{
 		URI: protocol.DocumentUri(uri), LanguageID: "python", Version: 1, Text: string(source),
@@ -179,6 +178,23 @@ func TestModelSelfInferenceUsesFilePathResolvedAtOpen(t *testing.T) {
 	completion, err := features.Completion(uri, position)
 	if err != nil || completion == nil || len(completion.Items) != 1 || completion.Items[0].Label != "title" {
 		t.Fatalf("Completion() through symlink = %#v, %v", completion, err)
+	}
+}
+
+func TestDidOpenDoesNotCacheInvalidFilePath(t *testing.T) {
+	features, err := NewFeatures(&schema.Cache{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer features.Close()
+	if err := features.didOpen(nil, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{
+		URI: "file://", LanguageID: "python", Version: 1, Text: "value = 1\n",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, ok := features.documents.Snapshot("file://")
+	if !ok || snapshot.FilePath != "" {
+		t.Fatalf("invalid URI cached file path %q", snapshot.FilePath)
 	}
 }
 
@@ -648,7 +664,7 @@ func featureTestGraph(t testingT) *schema.Graph {
 	graph, err := schema.Build(schema.Snapshot{
 		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps: map[string]schema.App{"myapp": {
-			Label: "myapp", ImportName: "myapp", RootPath: "/project/myapp",
+			Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(featureTestModelPath()),
 			Models: map[string]schema.Model{
 				"Author": featureTestModel("Author", map[string]schema.Field{
 					"id":   featureTestField("myapp.Author", "id", "django.db.models.fields.BigAutoField"),
@@ -697,7 +713,7 @@ func featureTestGraph(t testingT) *schema.Graph {
 func featureTestModel(name string, fields map[string]schema.Field) schema.Model {
 	return schema.Model{
 		CanonicalLabel: "myapp." + name, Module: "myapp.models", Qualname: name,
-		FilePath: "/project/myapp/models.py", LineNumber: 1, SourceRange: featureTestSourceRange(), Managed: true,
+		FilePath: featureTestModelPath(), LineNumber: 1, SourceRange: featureTestSourceRange(), Managed: true,
 		DefaultManager: "objects", BaseManager: schema.BaseManager{Name: "_base_manager", OwnerClass: "django.db.models.Manager"},
 		Managers: []schema.Manager{{Name: "objects", OwnerClass: "django.db.models.Manager", SourceRange: featureTestSourceRange()}},
 		Fields:   fields,
@@ -709,7 +725,20 @@ func featureTestField(sourceModel, name, fieldType string) schema.Field {
 }
 
 func featureTestSourceRange() *schema.SourceRange {
-	return &schema.SourceRange{FilePath: "/project/myapp/models.py", SourceDigest: strings.Repeat("0", 64), Start: schema.Position{Line: 1}, End: schema.Position{Line: 1, Column: 1}}
+	return &schema.SourceRange{FilePath: featureTestModelPath(), SourceDigest: strings.Repeat("0", 64), Start: schema.Position{Line: 1}, End: schema.Position{Line: 1, Column: 1}}
+}
+
+func featureTestModelPath() string {
+	return filepath.Join(os.TempDir(), "pogo-tests", "project", "myapp", "models.py")
+}
+
+func mustSourceFileURI(t testingT, path string) string {
+	t.Helper()
+	uri, ok := sourceFileURI(path)
+	if !ok {
+		t.Fatalf("sourceFileURI(%q) failed", path)
+	}
+	return string(uri)
 }
 
 func lspSourceAtCursor(t testingT, value string) ([]byte, analysis.Position) {

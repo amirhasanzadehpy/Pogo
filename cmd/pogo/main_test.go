@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -24,7 +26,7 @@ func TestResolveWorkerConfigPrecedenceAndWorkspaceFallback(t *testing.T) {
 	t.Setenv("VIRTUAL_ENV", "")
 	t.Setenv("DJANGO_SETTINGS_MODULE", "environment.settings")
 	project := t.TempDir()
-	rootURI := protocol.DocumentUri("file://" + filepath.ToSlash(project))
+	rootURI := testFileURI(project)
 	params := &protocol.InitializeParams{
 		RootURI: &rootURI,
 		InitializationOptions: map[string]any{
@@ -49,6 +51,14 @@ func TestResolveWorkerConfigPrecedenceAndWorkspaceFallback(t *testing.T) {
 	if config.PythonPath != "/cli/python" || config.SettingsModule != "cli.settings" {
 		t.Fatalf("CLI precedence config = %#v", config)
 	}
+}
+
+func testFileURI(path string) protocol.DocumentUri {
+	path = filepath.ToSlash(path)
+	if runtime.GOOS == "windows" {
+		path = "/" + path
+	}
+	return protocol.DocumentUri((&url.URL{Scheme: "file", Path: path}).String())
 }
 
 func TestResolveWorkerConfigDisablesEmptyWorkspaceAndRejectsAmbiguity(t *testing.T) {

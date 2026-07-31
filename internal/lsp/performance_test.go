@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -140,7 +141,7 @@ func scaleTestFeatures(b *testing.B, modelCount, denseRelations int) *Features {
 	}
 	graph, err := schema.Build(schema.Snapshot{
 		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
-		Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: "/project/myapp", Models: models}},
+		Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(featureTestModelPath()), Models: models}},
 	})
 	if err != nil {
 		b.Fatal(err)

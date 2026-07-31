@@ -1,6 +1,8 @@
 package analysis
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -133,7 +135,7 @@ func TestAnalyzeSyntaxFileTraversesSingleValuedRelationsFromModelSelf(t *testing
 				t.Fatal(err)
 			}
 			snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
-			context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, "/project/myapp/models.py")
+			context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, inferenceTestModelPath())
 			if !ok || context.Kind != ContextInstanceMember || context.Value.CanonicalLabel != test.model {
 				t.Fatalf("AnalyzeSyntaxFile() = %#v, %v; syntax=%#v", context, ok, snapshot.Syntax)
 			}
@@ -156,7 +158,7 @@ func TestAnalyzeSyntaxFileDoesNotTreatRelatedManagersAsInstances(t *testing.T) {
 			t.Fatal(err)
 		}
 		snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
-		if context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, "/project/myapp/models.py"); ok {
+		if context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, inferenceTestModelPath()); ok {
 			t.Fatalf("unsafe relation inference = %#v", context)
 		}
 	}
@@ -170,7 +172,7 @@ func TestAnalyzeSyntaxFileUsesNestedModelQualname(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
-	context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, "/project/myapp/models.py")
+	context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, inferenceTestModelPath())
 	if !ok || context.Kind != ContextInstanceMember || context.Value.CanonicalLabel != "myapp.Nested" {
 		t.Fatalf("nested AnalyzeSyntaxFile() = %#v, %v", context, ok)
 	}
@@ -335,7 +337,7 @@ func inferenceTestGraph(t *testing.T) *schema.Graph {
 		LookupTransformMaxDepth: 2,
 		LookupPathMaxCount:      512,
 		Apps: map[string]schema.App{
-			"myapp": {Label: "myapp", ImportName: "myapp", RootPath: "/project/myapp", Models: models},
+			"myapp": {Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(inferenceTestModelPath()), Models: models},
 		},
 	})
 	if err != nil {
@@ -349,7 +351,7 @@ func testModel(name string, fields map[string]schema.Field) schema.Model {
 		CanonicalLabel: "myapp." + name,
 		Module:         "myapp.models",
 		Qualname:       name,
-		FilePath:       "/project/myapp/models.py",
+		FilePath:       inferenceTestModelPath(),
 		LineNumber:     1,
 		SourceRange:    testSourceRange(),
 		Managed:        true,
@@ -378,9 +380,13 @@ func testSourceRange() *schema.SourceRange {
 
 func testSourceRangeAt(line int) *schema.SourceRange {
 	return &schema.SourceRange{
-		FilePath:     "/project/myapp/models.py",
+		FilePath:     inferenceTestModelPath(),
 		SourceDigest: strings.Repeat("0", 64),
 		Start:        schema.Position{Line: line},
 		End:          schema.Position{Line: line, Column: 1},
 	}
+}
+
+func inferenceTestModelPath() string {
+	return filepath.Join(os.TempDir(), "pogo-tests", "project", "myapp", "models.py")
 }

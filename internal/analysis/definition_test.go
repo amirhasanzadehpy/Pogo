@@ -30,7 +30,7 @@ func TestResolveDefinitionSyntaxAcrossORMReferences(t *testing.T) {
 			}
 			snapshot, _ := store.Snapshot("file:///definition.py")
 			sourceRange, ok := ResolveDefinitionSyntax(source, offset, graph, snapshot.Syntax)
-			if !ok || sourceRange.FilePath != "/project/myapp/models.py" {
+			if !ok || sourceRange.FilePath != inferenceTestModelPath() {
 				t.Fatalf("ResolveDefinitionSyntax() = %#v, %v", sourceRange, ok)
 			}
 		})
@@ -56,9 +56,9 @@ func TestResolveDefinitionSyntaxFileAcrossModelSelfRelationChain(t *testing.T) {
 			t.Fatal(err)
 		}
 		snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
-		sourceRange, ok := ResolveDefinitionSyntaxFile(source, offset, graph, snapshot.Syntax, "/project/myapp/models.py")
+		sourceRange, ok := ResolveDefinitionSyntaxFile(source, offset, graph, snapshot.Syntax, inferenceTestModelPath())
 		store.CloseAll()
-		if !ok || sourceRange.FilePath != "/project/myapp/models.py" || sourceRange.Start.Line != test.line {
+		if !ok || sourceRange.FilePath != inferenceTestModelPath() || sourceRange.Start.Line != test.line {
 			t.Fatalf("ResolveDefinitionSyntaxFile(%q) = %#v, %v", test.source, sourceRange, ok)
 		}
 	}

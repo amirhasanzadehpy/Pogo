@@ -3,6 +3,8 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -893,7 +895,7 @@ func TestRelationFieldForInheritedSourceRequiresOneTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	field, ok := graph.RelationFieldForSource("/project/app/models.py", "AbstractRelation", "relation", Position{Line: 1}, Position{Line: 1, Column: 1})
+	field, ok := graph.RelationFieldForSource(syntheticPath("models.py"), "AbstractRelation", "relation", Position{Line: 1}, Position{Line: 1, Column: 1})
 	if !ok || field.SourceModel() != "app.AbstractRelation" {
 		t.Fatalf("RelationFieldForSource() = %#v, %v", field, ok)
 	}
@@ -908,7 +910,7 @@ func TestRelationFieldForInheritedSourceRequiresOneTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if field, ok := graph.RelationFieldForSource("/project/app/models.py", "AbstractRelation", "relation", Position{Line: 1}, Position{Line: 1, Column: 1}); ok {
+	if field, ok := graph.RelationFieldForSource(syntheticPath("models.py"), "AbstractRelation", "relation", Position{Line: 1}, Position{Line: 1, Column: 1}); ok {
 		t.Fatalf("ambiguous RelationFieldForSource() = %#v", field)
 	}
 }
@@ -930,7 +932,7 @@ func syntheticSnapshot(count int) Snapshot {
 			CanonicalLabel: "app." + name,
 			Module:         "app.models",
 			Qualname:       name,
-			FilePath:       "/project/app/models.py",
+			FilePath:       syntheticPath("models.py"),
 			LineNumber:     index + 1,
 			SourceRange:    testRange(index + 1),
 			DefaultManager: "objects",
@@ -976,16 +978,21 @@ func syntheticSnapshot(count int) Snapshot {
 			"app": {
 				Label:      "app",
 				ImportName: "app",
-				RootPath:   "/project/app",
+				RootPath:   syntheticPath(),
 				Models:     models,
 			},
 		},
 	}
 }
 
+func syntheticPath(elements ...string) string {
+	parts := append([]string{os.TempDir(), "pogo-tests", "project", "app"}, elements...)
+	return filepath.Join(parts...)
+}
+
 func testRange(line int) *SourceRange {
 	return &SourceRange{
-		FilePath:     "/project/app/models.py",
+		FilePath:     syntheticPath("models.py"),
 		SourceDigest: strings.Repeat("0", 64),
 		Start:        Position{Line: line},
 		End:          Position{Line: line, Column: 1},
