@@ -9,7 +9,7 @@ editor hot path.
 
 ## Quick Start
 
-1. Download `pogo` for your operating system from
+1. Download the archive for your operating system and CPU from
    [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases).
 2. Put the executable on `PATH` and confirm it runs:
 
@@ -33,8 +33,10 @@ installed in the selected project environment.
 
 ### Linux And macOS
 
-After downloading and extracting the release asset, install the binary for your
-user:
+Release archives are named `pogo-vX.Y.Z-<os>-<arch>.tar.gz`. Download the
+`linux` or `darwin` archive matching `amd64` or `arm64`, verify it against
+`checksums.txt`, and extract it. The archive contains one `pogo` binary. Install
+it for your user:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
@@ -67,7 +69,9 @@ xattr -d com.apple.quarantine "$HOME/.local/bin/pogo"
 
 ### Windows
 
-Download `pogo.exe`, then run this in PowerShell:
+Download the matching `pogo-vX.Y.Z-windows-<arch>.zip` and `checksums.txt`.
+Verify the archive with `Get-FileHash -Algorithm SHA256`, extract it, then run
+this in PowerShell:
 
 ```powershell
 $PogoBin = Join-Path $HOME ".local\bin"

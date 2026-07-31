@@ -104,3 +104,90 @@ jobs:
         with:
           name: benchmark-${{ runner.os }}
           path: benchmark-results/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [django-compat, race, native-transport, cross-build, performance-gates]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22.x"
+          cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/vscode/package-lock.json
+      - name: Validate release version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tag must match vX.Y.Z: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          extension_version="$(node -p "require('./client/vscode/package.json').version")"
+          if [[ "$extension_version" != "$version" ]]; then
+            echo "VS Code extension version $extension_version does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          git fetch origin main
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "release tag must point to a commit already on main" >&2
+            exit 1
+          fi
+      - name: Build release binaries
+        shell: bash
+        run: |
+          mkdir -p dist/stage
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            stage="dist/stage/${goos}-${goarch}"
+            artifact="pogo-${GITHUB_REF_NAME}-${goos}-${goarch}"
+            mkdir -p "$stage"
+            executable="$stage/pogo"
+            if [[ "$goos" == "windows" ]]; then executable="$executable.exe"; fi
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+              -trimpath -tags=grammar_subset,grammar_subset_python -ldflags='-s -w' \
+              -o "$executable" ./cmd/pogo
+            if [[ "$goos" == "windows" ]]; then
+              zip -j "dist/${artifact}.zip" "$executable"
+            else
+              tar -C "$stage" -czf "dist/${artifact}.tar.gz" pogo
+            fi
+          done
+          expected="pogo ${GITHUB_REF_NAME#v}"
+          actual="$(dist/stage/linux-amd64/pogo -version 2>&1)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "release binary reports $actual, expected $expected" >&2
+            exit 1
+          fi
+          python3 scripts/check_release.py dist/stage/*/pogo*
+      - name: Build VS Code extension
+        working-directory: client/vscode
+        run: |
+          npm ci --include=dev
+          npm run package -- --out "../../dist/pogo-${GITHUB_REF_NAME#v}.vsix"
+      - name: Generate checksums
+        shell: bash
+        run: |
+          rm -rf dist/stage
+          cd dist
+          sha256sum pogo-* > checksums.txt
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "Pogo ${GITHUB_REF_NAME#v}"

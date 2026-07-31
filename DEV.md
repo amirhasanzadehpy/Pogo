@@ -235,8 +235,9 @@ graphs but are not presented as native transport tests.
 
 ## Release Inspection
 
-Production builds must retain `grammar_subset,grammar_subset_python`; Darwin
-also requires `-ldflags=-linkmode=external`. Run:
+Production builds must retain `grammar_subset,grammar_subset_python`. Native
+Darwin builds with CGO enabled also require `-ldflags=-linkmode=external`;
+release archives are reproducible cross-builds with `CGO_ENABLED=0`. Run:
 
 ```sh
 make build
@@ -247,6 +248,14 @@ go version -m build/pogo
 The inspection rejects fixture markers in release binaries, rejects production
 dependency paths containing `testdata` or `internal/harness`, and AST-checks the
 embedded worker import roots against the Python standard library plus Django.
+
+Publishing is tag-driven. After the release version in the server and VS Code
+extension matches `X.Y.Z`, commit and push those changes to `main`, then push a
+`vX.Y.Z` tag for that commit. The CI release job rejects tags whose commit is
+not already on `main`, waits for all compatibility, race, native transport,
+cross-build, and performance jobs, then publishes Linux, macOS, and Windows
+archives for amd64/arm64, the VSIX, and `checksums.txt` to GitHub Releases.
+Non-version tags are never published.
 
 For a clean-room verification, export `HEAD` into a temporary directory, set
 fresh `GOCACHE`, `GOMODCACHE`, and `PIP_CACHE_DIR` paths, then run:
