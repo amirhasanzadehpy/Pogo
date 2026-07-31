@@ -1,82 +1,148 @@
-# Pogo
+<p align="center">
+  <img src="assets/pogo-hero.png" alt="Pogo completing a Django ORM relation path and showing its runtime schema architecture" width="100%">
+</p>
 
-**Fast, runtime-accurate Django ORM intelligence for your editor.**
+<h1 align="center">Pogo</h1>
 
-Pogo is an LSP 3.16 language server that understands the model schema Django
-actually loads. It provides ORM completion, hover information, signature help,
-diagnostics, go-to-definition, and document links while keeping Python off the
-editor hot path.
+<p align="center">
+  <strong>Runtime-accurate Django ORM intelligence for your editor.</strong><br>
+  Pogo boots the Django project you actually run, builds an immutable schema graph,
+  and serves completion, diagnostics, hover, signatures, and navigation from a fast Go LSP.
+</p>
+
+<p align="center">
+  <a href="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml"><img src="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-56e39f?style=flat-square" alt="Release v0.1.0"></a>
+  <img src="https://img.shields.io/badge/Go-1.22%2B-42b7ff?style=flat-square" alt="Go 1.22 or newer">
+  <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square" alt="Python 3.10 through 3.13">
+  <img src="https://img.shields.io/badge/Django-4.2%20%7C%205.2-0c4b33?style=flat-square" alt="Django 4.2 and 5.2">
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> |
+  <a href="#what-pogo-adds">Features</a> |
+  <a href="#performance">Performance</a> |
+  <a href="#editor-setup">Editors</a> |
+  <a href="#how-it-works">Architecture</a> |
+  <a href="https://github.com/amirhasanzadehpy/Pogo/releases">Releases</a>
+</p>
+
+## Why Pogo
+
+Django's real schema is created at runtime. Installed apps, abstract fields,
+custom managers, `QuerySet` methods, database-specific lookups, reverse
+relations, and project settings all affect what the ORM can do. Static stubs
+alone cannot see the complete result.
+
+Pogo combines both sides:
+
+- **Django supplies truth.** An embedded Python worker runs `django.setup()` in
+  your selected environment and reads the model registry Django initialized.
+- **Go keeps editing responsive.** The validated schema is indexed once and
+  atomically swapped into an in-process graph. Editor requests do not invoke
+  Python on the hot path.
+- **Analysis stays conservative.** Pogo understands static model values and ORM
+  paths without pretending to be a general Python type checker.
+
+Pogo is designed to run beside Pyright, BasedPyright, Ruff, or another general
+Python tool, not replace it.
+
+## What Pogo Adds
+
+| Capability | Django-aware behavior |
+| --- | --- |
+| **Completion** | Fields, foreign-key attnames, relations, reverse names, lookups, transforms, managers, and custom `QuerySet` methods |
+| **ORM paths** | `filter`, `exclude`, `get`, `values`, `values_list`, `only`, `defer`, `select_related`, and `prefetch_related` |
+| **Hover** | Django field class, database type and column, nullability, `db_index`, uniqueness, relation targets, and field help text |
+| **Signature help** | Cached signatures and docstrings for custom manager and `QuerySet` methods |
+| **Diagnostics** | Exact invalid path segments, non-relation traversal, invalid lookups, projections, and `select_related` targets |
+| **Navigation** | Definitions for models, fields, relations, reverse accessors, managers, custom methods, and individual path segments |
+| **Document links** | Static relation targets, `related_name` values, and resolvable ORM string paths |
+| **Schema refresh** | Debounced reloads, atomic graph replacement, and last-valid-schema fallback when a refresh fails |
+
+## Performance
+
+<p align="center">
+  <img src="assets/pogo-benchmarks.png" alt="Pogo p95 interaction latency and release memory budget chart" width="100%">
+</p>
+
+The current reference profile keeps every plotted interaction workload below
+`1 ms` p95, including dense relation completion and a batch of 100 invalid
+expressions. Larger document-update and snapshot workloads are measured
+separately in the full profile.
+
+| Workload | Scope | p95 |
+| --- | --- | ---: |
+| Hover | Loaded-cache handler | `3.50 us` |
+| Completion in a 10,000-model graph | Selected imported model; graph already built | `4.75 us` |
+| Diagnostics | Incremental edit, parse, analysis, and publish | `15.75 us` |
+| Definition | Loaded-cache handler | `28.33 us` |
+| Completion | Incremental edit, parse, and handler | `58.67 us` |
+| Document links | Loaded-cache handler | `104.40 us` |
+| Dense relation completion | 256 completion candidates | `496.80 us` |
+| Diagnostic scale | 100 invalid ORM expressions | `653.00 us` |
+
+| Release gate | Observed | Budget |
+| --- | ---: | ---: |
+| Completion p95 | `58.67 us` | `< 10,000 us` |
+| Go server idle RSS | `19.67 MiB` | `<= 50 MiB` |
+| Combined Go + Python idle RSS | `67.55 MiB` | `<= 150 MiB` |
+
+Reference profile: tracked source at `ca86c19`, captured July 31, 2026 on an
+Apple M1 with macOS 26.5.2, Go 1.22.12, Python 3.11.10, and Django 5.2.16.
+Timings are synthetic in-process benchmarks with 200 samples unless stated
+otherwise; editor transport, process startup, and Django schema loading are not
+included. Memory is the maximum observed idle RSS over 20 aligned samples, not
+process-lifetime peak memory. Results vary by machine and project.
+
+Run the same release-gated profile locally:
+
+```sh
+make fixture-env
+make bench
+```
+
+See [Performance Profiles](DEV.md#performance-profiles) for the full benchmark
+matrix, methodology, profiling commands, and CI artifact layout.
 
 ## Quick Start
 
-1. Download the archive for your operating system and CPU from
-   [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases).
-2. Put the executable on `PATH` and confirm it runs:
+The shortest supported path is a release binary plus the first-party VS Code
+extension.
 
-   ```sh
-   pogo -version
-   ```
+### 1. Install The Server
 
-3. Add the setup for [VS Code](#vs-code), [Neovim](#neovim), or
-   [Zed](#zed).
-4. Open the directory containing `manage.py` and edit a Python file. Pogo finds
-   the project environment and Django settings automatically.
+Download the archive for your OS and CPU from
+[GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases). Every
+release includes Linux, macOS, and Windows builds for `amd64` and `arm64`, plus
+`checksums.txt`.
 
-Pogo supports Python 3.10 through 3.13 with Django 5.2. Django 4.2 remains an
-EOL compatibility target on the Python versions Django 4.2 supports.
+The commands below use common architectures as examples. Replace `amd64` with
+`arm64`, and `linux` with `darwin`, to match the archive you downloaded.
 
-## Installation
-
-Pogo is one native executable. It does not install a Python package into your
-project; the embedded worker uses the standard library and the Django already
-installed in the selected project environment.
-
-### Linux And macOS
-
-Release archives are named `pogo-vX.Y.Z-<os>-<arch>.tar.gz`. Download the
-`linux` or `darwin` archive matching `amd64` or `arm64`, verify it against
-`checksums.txt`, and extract it. The archive contains one `pogo` binary. Install
-it for your user:
+Linux and macOS archives contain one `pogo` executable:
 
 ```sh
+tar -xzf pogo-v0.1.0-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
 mkdir -p "$HOME/.local/bin"
-install -m 0755 "$HOME/Downloads/pogo" "$HOME/.local/bin/pogo"
+install -m 0755 pogo "$HOME/.local/bin/pogo"
 export PATH="$HOME/.local/bin:$PATH"
 pogo -version
 ```
 
-Make the `PATH` change permanent by adding this line to `~/.profile`,
-`~/.zprofile`, or your shell's equivalent:
+Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.profile`, `~/.zprofile`, or
+your shell's equivalent to keep the command available after restarting.
 
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
+Windows PowerShell:
 
-For a machine-wide installation instead:
-
-```sh
-sudo install -m 0755 "$HOME/Downloads/pogo" /usr/local/bin/pogo
-pogo -version
-```
-
-If macOS reports that the downloaded binary cannot be opened, approve it in
-**System Settings > Privacy & Security**, or remove the quarantine attribute
-after verifying the release checksum:
-
-```sh
-xattr -d com.apple.quarantine "$HOME/.local/bin/pogo"
-```
-
-### Windows
-
-Download the matching `pogo-vX.Y.Z-windows-<arch>.zip` and `checksums.txt`.
-Verify the archive with `Get-FileHash -Algorithm SHA256`, extract it, then run
-this in PowerShell:
+The example uses `windows-amd64`; substitute `windows-arm64` in both commands on
+Windows on Arm.
 
 ```powershell
+Expand-Archive .\pogo-v0.1.0-windows-amd64.zip -DestinationPath .\pogo
 $PogoBin = Join-Path $HOME ".local\bin"
 New-Item -ItemType Directory -Force $PogoBin | Out-Null
-Copy-Item "$HOME\Downloads\pogo.exe" "$PogoBin\pogo.exe"
+Copy-Item .\pogo\pogo.exe "$PogoBin\pogo.exe"
 
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (($UserPath -split ";") -notcontains $PogoBin) {
@@ -86,72 +152,138 @@ $env:Path = "$PogoBin;$env:Path"
 pogo.exe -version
 ```
 
-Restart the editor after changing the user `PATH`.
+<details>
+<summary>Download with GitHub CLI and verify checksums</summary>
 
-### Build From Source
-
-Building requires Git, Go 1.22 or newer, and `make` on Linux/macOS:
+This repository is private, so authenticate `gh` before downloading:
 
 ```sh
-git clone https://github.com/amirhasanzadehpy/Pogo.git
-cd Pogo
-make build
-./build/pogo -version
+gh auth login
+gh release download v0.1.0 \
+  --repo amirhasanzadehpy/Pogo \
+  --pattern 'pogo-v0.1.0-linux-amd64.tar.gz' \
+  --pattern checksums.txt
+sha256sum --check --ignore-missing checksums.txt
 ```
 
-The development binary remains at `build/pogo` on Linux/macOS and
-can be used directly without installing it globally.
-
-On Windows, build the server from PowerShell with:
+Change the `--pattern` target to match your OS and CPU. On macOS, download the
+matching `darwin` archive and calculate its digest with
+`shasum -a 256 pogo-v0.1.0-darwin-arm64.tar.gz` and compare it with the matching
+line in `checksums.txt`. On Windows, use:
 
 ```powershell
-git clone https://github.com/amirhasanzadehpy/Pogo.git
-Set-Location Pogo
-New-Item -ItemType Directory -Force build | Out-Null
-go build -tags="grammar_subset,grammar_subset_python" -o build/pogo.exe ./cmd/pogo
-.\build\pogo.exe -version
+Get-FileHash .\pogo-v0.1.0-windows-amd64.zip -Algorithm SHA256
 ```
 
-## Editor Setup
+</details>
 
-### VS Code
+### 2. Install The VS Code Extension
 
-Pogo's VS Code extension starts one server for each Python workspace folder,
-finds `pogo` on the extension host's `PATH`, and reports a direct
-download action when the binary is missing.
-
-Install the release VSIX from a terminal:
+Download `pogo-0.1.0.vsix` from the same release, then run:
 
 ```sh
 code --install-extension "$HOME/Downloads/pogo-0.1.0.vsix"
 ```
 
-Alternatively, open **Extensions: Install from VSIX...** from the command
-palette and select the downloaded file. Reload VS Code, open a trusted Django
-project, and open any Python file.
+You can also run **Extensions: Install from VSIX...** from the command palette.
+Reload VS Code after installation.
 
-For a source checkout, build and install the extension with:
+### 3. Open A Django Project
 
-```sh
-cd client/vscode
-npm ci --include=dev
-npm run package
-code --install-extension pogo-0.1.0.vsix --force
+Open the trusted workspace containing `manage.py`, then open a Python file. By
+default Pogo discovers:
+
+- The workspace folder as the project root.
+- An active `VIRTUAL_ENV`, then the project's `.venv`.
+- `DJANGO_SETTINGS_MODULE`, the literal setting in `manage.py`, or one
+  unambiguous immediate `*/settings.py`.
+
+The selected interpreter must already contain Django and every dependency your
+project imports during `django.setup()`.
+
+### 4. Verify ORM Intelligence
+
+Request completion while typing a relation path:
+
+```python
+from shop.models import Order
+
+orders = Order.objects.filter(
+    customer__address__city__icontains="York",
+)
 ```
 
-To use a server built in a separate Pogo checkout, add its absolute path to the
-Django project's `.vscode/settings.json`:
+Pogo should complete each path segment, show field and lookup hover details,
+navigate to model definitions, and diagnose misspelled paths.
 
-```json
-{
-  "pogo.executablePath": "/absolute/path/to/Pogo/build/pogo"
-}
+## Everyday Usage
+
+### Complete The ORM You Already Write
+
+Pogo changes suggestions to match the API context:
+
+```python
+# Query names, transforms, and terminal lookups.
+Order.objects.filter(customer__email__iexact=email)
+
+# Projection paths.
+Order.objects.values("customer__email", "total")
+
+# Only single-valued relations are offered here.
+Order.objects.select_related("customer__profile")
+
+# Reverse accessors and collection relations are valid here.
+Order.objects.prefetch_related("items__product")
 ```
 
-Relative paths are resolved from each Django workspace folder, so
-`"build/pogo"` is valid only when that binary is inside the project.
-On Windows, use the `.exe` path. For projects whose environment is ambiguous,
-all available overrides are:
+Lookup suggestions come from the active Django field registry. Pogo also checks
+the default database's JSON containment capability and omits `contains` and
+`contained_by` when that backend does not support them.
+
+### Catch Broken Paths Before Runtime
+
+```python
+# "adress" is reported as django-orm.unknown-path-segment.
+Order.objects.filter(customer__adress__city="York")
+```
+
+Diagnostics use the exact UTF-16 range for the bad segment. Pogo also detects
+non-relation traversal, invalid transforms or lookups, invalid projection
+paths, and invalid `select_related` targets.
+
+### Understand Project APIs
+
+Custom manager and `QuerySet` methods are introspected but never called. Hover
+shows their cached class, signature, and docstring; signature help preserves
+positional-only, keyword-only, variadic, and keyword arguments. Return
+annotations help Pogo continue inference through custom chains.
+
+### Navigate Schema-Backed Code
+
+Go to definition works on model imports, fields, relation segments, reverse
+accessors, managers, and custom methods. Static `ForeignKey`, `OneToOneField`,
+`ManyToManyField`, and `related_name` strings become document links when their
+source remains current.
+
+### Refresh Without Blocking Editing
+
+Saving Python under an installed Django app schedules a trailing-edge schema
+refresh. A valid generation replaces the graph atomically. If Django fails to
+reload, Pogo keeps the last valid graph and warns once, so editor features stay
+available while you fix the project error.
+
+## Editor Setup
+
+| Editor | Integration | Status |
+| --- | --- | --- |
+| **VS Code** | Bundled language-client extension | First-party; one Pogo process per workspace folder |
+| **Neovim 0.11.3+** | Built-in LSP API | Direct configuration; no separate Pogo plugin required |
+| **Zed** | External command through a registered Python adapter | Temporary bridge until a native adapter exists |
+
+### VS Code
+
+Automatic discovery is enough for standard projects. For an unusual layout,
+add only the required overrides to `.vscode/settings.json`:
 
 ```json
 {
@@ -165,22 +297,17 @@ all available overrides are:
 }
 ```
 
-The server environment starts with the VS Code extension host environment.
-Values from `pogo.envFile` override inherited values, then
-`pogo.environment` wins. Set a key to `null` to remove an inherited variable.
-This is useful when editor tooling exports a generic variable such as `DEBUG`
-that has different meaning in the Django project.
-Do not put credentials directly in `pogo.environment`: workspace settings may
-be committed and user settings may be synchronized. Keep secrets in an ignored,
-permission-restricted dotenv file and reference it with `pogo.envFile`.
+Relative paths resolve from each workspace folder. Environment precedence is
+extension host, dotenv file, then `pogo.environment`; `null` removes an
+inherited value. Keep credentials in an ignored, permission-restricted dotenv
+file rather than workspace settings.
 
-In Remote SSH, WSL, Dev Containers, and Codespaces, install the binary or set
-the executable path on the remote extension host, not the local desktop.
+Remote SSH, WSL, Dev Containers, and Codespaces run Pogo on the remote extension
+host. Install the binary there, not only on the local desktop.
 
 ### Neovim
 
-Current `nvim-lspconfig` uses Neovim's built-in configuration API. With Neovim
-0.11.3 or newer and `nvim-lspconfig` installed, put this in your Lua config:
+With current `nvim-lspconfig`:
 
 ```lua
 vim.lsp.config("pogo", {
@@ -192,86 +319,16 @@ vim.lsp.config("pogo", {
 vim.lsp.enable("pogo")
 ```
 
-For `lazy.nvim`, save this as a plugin spec such as
-`lua/plugins/pogo.lua`:
+Use `init_options.djangoOrm.pythonPath` and
+`init_options.djangoOrm.settingsModule` only when discovery is ambiguous. Run
+`:checkhealth vim.lsp` to inspect the active root, command, and logs.
 
-```lua
-return {
-  {
-    "neovim/nvim-lspconfig",
-    ft = { "python" },
-    config = function()
-      vim.lsp.config("pogo", {
-        cmd = { "pogo" },
-        filetypes = { "python" },
-        root_markers = { "manage.py", "pyproject.toml", ".git" },
-      })
+<details>
+<summary>Zed bridge configuration</summary>
 
-      vim.lsp.enable("pogo")
-    end,
-  },
-}
-```
-
-For a local build, replace the command with an absolute path:
-
-```lua
-cmd = { "/absolute/path/to/Pogo/build/pogo" }
-```
-
-Only add initialization overrides when automatic discovery is insufficient:
-
-```lua
-vim.lsp.config("pogo", {
-  cmd = { "pogo" },
-  filetypes = { "python" },
-  root_markers = { "manage.py", "pyproject.toml", ".git" },
-  init_options = {
-    djangoOrm = {
-      pythonPath = "/absolute/path/to/project/.venv/bin/python",
-      settingsModule = "config.settings",
-    },
-  },
-})
-
-vim.lsp.enable("pogo")
-```
-
-Run `:checkhealth vim.lsp` to inspect the active command, root, and server log.
-
-### Zed
-
-Zed can override the command behind a registered language-server adapter, but
-its `settings.json` cannot register a new adapter name. Until Pogo has a native
-Zed adapter, use Zed's registered `pyright` slot as the external-command bridge.
-This starts Pogo, not Pyright, for that slot.
-
-Open **Zed: Open Settings**, then add:
-
-```jsonc
-{
-  "languages": {
-    "Python": {
-      "language_servers": ["pyright", "..."]
-    }
-  },
-  "lsp": {
-    "pyright": {
-      "binary": {
-        "path": "/home/you/.local/bin/pogo",
-        "arguments": []
-      }
-    }
-  }
-}
-```
-
-Change `binary.path` to the absolute installation path. On macOS that is often
-`/Users/you/.local/bin/pogo`; on Windows, JSON paths use escaped
-backslashes such as `C:\\Users\\you\\.local\\bin\\pogo.exe`.
-
-To keep separate Python type checking, install another registered Python server
-such as BasedPyright and list it after the bridge:
+Zed cannot currently register a new language-server adapter from
+`settings.json`. The available bridge replaces the command behind its `pyright`
+slot with Pogo:
 
 ```jsonc
 {
@@ -285,10 +342,8 @@ such as BasedPyright and list it after the bridge:
       "binary": {
         "path": "/home/you/.local/bin/pogo",
         "arguments": [
-          "-python",
-          "/absolute/path/to/project/.venv/bin/python",
-          "-settings",
-          "config.settings"
+          "-python", "/absolute/path/to/project/.venv/bin/python",
+          "-settings", "config.settings"
         ]
       }
     }
@@ -296,137 +351,165 @@ such as BasedPyright and list it after the bridge:
 }
 ```
 
-The Pyright adapter does not forward arbitrary initialization options, so this
-bridge uses Pogo's equivalent CLI flags. Put project-specific settings in
-`.zed/settings.json` and restart language servers after changing arguments.
+This starts Pogo, not Pyright, in that slot. Keep another registered Python
+server such as BasedPyright enabled for general typing. Use escaped backslashes
+for Windows JSON paths and restart language servers after changing arguments.
 
-## Environment Resolution
+</details>
 
-Pogo resolves the project, Python interpreter, and Django settings separately.
-The first non-empty match in each list wins.
+## How It Works
 
-### Project Root
-
-| Priority | Source |
-|---:|---|
-| 1 | Server flag: `-project /absolute/path` |
-| 2 | LSP option: `djangoOrm.projectRoot` |
-| 3 | The sole LSP workspace folder |
-| 4 | LSP `rootUri` |
-| 5 | Legacy LSP `rootPath` |
-
-Multiple workspace folders require an explicit project root. The VS Code
-extension handles this automatically by starting one Pogo client per folder.
-
-### Python Interpreter
-
-| Priority | Source |
-|---:|---|
-| 1 | Server flag: `-python /absolute/path/to/python` |
-| 2 | LSP option: `djangoOrm.pythonPath` |
-| 3 | `$VIRTUAL_ENV/bin/python` or `%VIRTUAL_ENV%\\Scripts\\python.exe` |
-| 4 | `<project>/.venv/bin/python` or `<project>\\.venv\\Scripts\\python.exe`, when present |
-| 5 | `python3` from `PATH` |
-
-An activated virtual environment therefore wins over the project's `.venv`.
-Use the editor override when the editor process inherited the wrong
-`VIRTUAL_ENV`. On Windows, set an explicit Python path when the installation
-provides `python.exe` or `py.exe` but not `python3.exe`.
-
-### Django Settings Module
-
-| Priority | Source |
-|---:|---|
-| 1 | Server flag: `-settings config.settings` |
-| 2 | LSP option: `djangoOrm.settingsModule` |
-| 3 | `DJANGO_SETTINGS_MODULE` inherited by Pogo |
-| 4 | A literal `DJANGO_SETTINGS_MODULE` value in `manage.py`'s `os.environ.setdefault(...)` call |
-| 5 | One unambiguous immediate `*/settings.py` under the project root |
-
-If no settings file is found, or several immediate settings files are possible,
-Pogo reports the ambiguity instead of guessing. Set `pogo.settingsModule` in
-VS Code, `djangoOrm.settingsModule` in Neovim's initialization options, or
-`-settings` in Zed's bridge arguments.
-
-## Verify The Setup
-
-Open a model-aware query and request completion inside the string:
-
-```python
-from shop.models import Order
-
-Order.objects.filter(customer__address__city__icontains="York")
+```mermaid
+flowchart LR
+    E[Editor or LSP client] <-->|stdio / LSP 3.16| G[Go language server]
+    G <-->|authenticated local IPC| W[Embedded Python worker]
+    W -->|django.setup| D[Django app registry]
+    D -->|runtime metadata| W
+    W -->|validated schema/load| C[Immutable schema graph]
+    C -->|atomic generation| G
+    G -->|completion, hover, diagnostics, navigation| E
 ```
 
-Pogo should provide field, relation, transform, and lookup completion; hover
-information; diagnostics for invalid path segments; and go-to-definition for
-model-backed symbols. It also understands managers, custom QuerySets,
-`values`, `values_list`, `only`, `defer`, `select_related`, and
-`prefetch_related`.
+1. The editor initializes Pogo with a project root, interpreter, and optional
+   settings module.
+2. Pogo extracts its embedded Python worker into a private temporary directory
+   and starts it with a random 256-bit authentication token.
+3. The worker runs Django and returns fields, relations, managers, custom
+   methods, indexes, constraints, source ranges, and backend-aware lookups.
+4. Go strictly validates the payload and builds indexed, immutable views.
+5. Editor features read that graph directly. Python returns only for a schema
+   refresh, not for each completion or hover request.
 
-Pogo intentionally does not replace a general Python language server. Keep
-Pyright, BasedPyright, Ruff, or another Python tool enabled for general typing,
-rename, references, imports, and formatting.
+Unix systems use a private mode-0600 Unix socket. Windows uses authenticated
+loopback TCP. IPC authentication protects the local endpoint; it is not a
+sandbox for project code.
+
+## Compatibility And Scope
+
+| Python | Django 4.2 | Django 5.2 |
+| ---: | :---: | :---: |
+| 3.10 | Tested | Tested |
+| 3.11 | Tested | Tested |
+| 3.12 | Tested | Tested |
+| 3.13 | Not supported upstream | Tested |
+
+Release binaries target Linux, macOS, and Windows on `amd64` and `arm64`.
+
+Pogo deliberately favors false negatives over false positives. It recognizes
+direct, aliased, and qualified model imports; model constructors; assignments;
+model annotations; `QuerySet[Model]`; selected manager/query chains; and
+annotated parameters. Dynamic filters, `**kwargs`, f-strings, concatenated
+paths, unresolved receivers, and unsafe rebinding are generally left alone.
+
+Pogo does not provide general Python typing, rename, references, formatting,
+imports, code actions, or workspace symbols. Keep your existing Python language
+server and formatter enabled.
+
+## Configuration
+
+| Need | VS Code | LSP initialization | CLI |
+| --- | --- | --- | --- |
+| Project root | Workspace folder | `djangoOrm.projectRoot` | `-project PATH` |
+| Python interpreter | `pogo.pythonPath` | `djangoOrm.pythonPath` | `-python PATH` |
+| Settings module | `pogo.settingsModule` | `djangoOrm.settingsModule` | `-settings MODULE` |
+| Environment file | `pogo.envFile` | Client-managed | Client-managed |
+| Logs | Pogo output channel | Client stderr | `-log-file PATH` |
+
+<details>
+<summary>Automatic resolution order</summary>
+
+Project root:
+
+1. `-project`
+2. `djangoOrm.projectRoot`
+3. The sole workspace folder
+4. LSP `rootUri`
+5. Legacy `rootPath`
+
+Python interpreter:
+
+1. `-python`
+2. `djangoOrm.pythonPath`
+3. Active `VIRTUAL_ENV`
+4. Project `.venv`
+5. `python3` on `PATH`
+
+Django settings:
+
+1. `-settings`
+2. `djangoOrm.settingsModule`
+3. `DJANGO_SETTINGS_MODULE`
+4. A literal `os.environ.setdefault(...)` value in `manage.py`
+5. One unambiguous immediate `*/settings.py`
+
+Ambiguous settings fail with an actionable error instead of an arbitrary guess.
+
+</details>
 
 ## Troubleshooting
 
-### The Editor Cannot Find The Binary
+| Symptom | Check |
+| --- | --- |
+| Editor cannot find Pogo | Run `pogo -version` from the editor host, or configure an absolute executable path |
+| ORM results are empty | Confirm the selected interpreter can import Django, the project, and its dependencies |
+| Results are stale after a save | Check the Pogo output/log for a failed Django refresh; the last valid graph remains active |
+| Wrong virtual environment | Clear the inherited `VIRTUAL_ENV` or set the editor's explicit Python path |
+| Multiple projects in one window | Use one LSP root per project; VS Code creates one client per workspace folder automatically |
 
-Confirm the editor can see the executable:
+Desktop applications on macOS may not inherit your shell `PATH`. Configure
+`pogo.executablePath` or start VS Code from a terminal. If Gatekeeper blocks a
+verified binary, approve it in **System Settings > Privacy & Security** or run
+`xattr -d com.apple.quarantine ~/.local/bin/pogo` after checking its digest.
+
+## Build And Contribute
+
+Building from source requires Git, Go 1.22 or newer, Python 3.10-3.13, and GNU
+Make on Linux or macOS:
 
 ```sh
-command -v pogo
-pogo -version
+git clone https://github.com/amirhasanzadehpy/Pogo.git
+cd Pogo
+make fixture-env
+make build
+make test
+./build/pogo -version
 ```
 
-On Windows:
+Useful development gates:
 
-```powershell
-Get-Command pogo.exe
-pogo.exe -version
+```sh
+make test-race      # race-enabled Go suite
+make compat         # pinned Django 4.2 and 5.2 fixtures
+make bench          # profile plus release performance gates
+make release-check  # inspect production dependencies and embedded imports
 ```
 
-Desktop applications, especially on macOS, may not inherit your interactive
-shell's `PATH`. Use the editor's absolute executable-path setting or start the
-editor from a terminal after exporting `PATH`.
+| Directory | Responsibility |
+| --- | --- |
+| `cmd/pogo` | CLI, configuration, logging, and server wiring |
+| `internal/lsp` | LSP lifecycle, capabilities, handlers, diagnostics, and navigation |
+| `internal/analysis` | Tree-sitter parsing, document state, model inference, and ORM paths |
+| `internal/schema` | DTO validation, indexed graph views, and atomic cache generations |
+| `internal/python` | Worker supervision, authentication, refresh, and transport |
+| `src/daemon` | Embedded Django introspection worker |
+| `client/vscode` | First-party VS Code language client |
 
-### ORM Results Are Empty Or Stale
-
-Pogo starts Django asynchronously after LSP initialization. Until the first
-schema load completes, schema-backed requests return no result rather than
-guessed data. Check that:
-
-- The selected Python interpreter has Django and project dependencies installed.
-- The workspace root contains the Django project.
-- The settings module resolves using the precedence table above.
-- Any environment setup normally performed by `manage.py` is represented by
-  `pogo.envFile` and `pogo.environment` in VS Code.
-- Importing the project does not raise an exception.
-
-In VS Code, open **View > Output** and select **Pogo**. In Neovim, run
-`:LspLog`. In Zed, run **Zed: Open Log**. Saving Python under an installed Django
-application triggers a debounced schema refresh; the last valid schema remains
-available if refresh fails.
-
-### Configuration Changed But Nothing Happened
-
-The VS Code extension restarts its clients when a `pogo.*` setting changes.
-Neovim initialization options and Zed bridge arguments are startup-only, so
-restart the language server after changing them.
-
-### Multiple Projects In One Window
-
-VS Code starts a separate Pogo process for every local workspace folder. In
-Neovim or Zed, configure each Django project as its own LSP root. A single Pogo
-process deliberately rejects multiple workspace folders unless
-`djangoOrm.projectRoot` is explicit.
+See [DEV.md](DEV.md) for protocol traces, schema inspection, fuzzing,
+performance profiling, release inspection, and versioning.
 
 ## Security
 
-Pogo starts Django, and Django imports and executes code from the project. That
-code can access files, databases, services, credentials, and the network with
-the editor process's permissions. Pogo is not a sandbox: use it only with
-trusted workspaces. The VS Code extension is disabled in untrusted workspaces.
+Pogo starts Django, and `django.setup()` imports and executes code from the
+project. That code has the editor process's access to files, databases,
+services, credentials, and the network. Use Pogo only with trusted workspaces.
+The VS Code extension is disabled in untrusted and virtual workspaces.
 
-Runtime schema loading uses a private authenticated local endpoint. Editor hot
-paths read an immutable in-process schema and do not invoke Python.
+## Releases
+
+Version tags are built only after the complete compatibility, race, native
+transport, cross-build, and performance matrix passes. CI publishes six binary
+archives, the VS Code VSIX, generated release notes, and `checksums.txt` to
+[GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases).
+
+For bugs and feature requests, use
+[GitHub Issues](https://github.com/amirhasanzadehpy/Pogo/issues).

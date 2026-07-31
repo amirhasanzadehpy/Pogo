@@ -163,11 +163,12 @@ benchmark-results/
 ```
 
 `profile.json` records command lines, environment metadata, iterations,
-`ns/op`, `B/op`, `allocs/op`, p50/p95/p99 where sampled, aligned RSS samples,
-and gate results. A missing required metric fails the harness. The fixed gates
-are completion p95 `<10 ms`, Go RSS `<=50 MiB`, and combined RSS `<=150 MiB`.
-Linux and macOS failures are not waived for platform variance; Windows RSS is
-informational because the standard-library sampler is unavailable there.
+`ns/op`, `B/op`, `allocs/op`, p50/p95/p99 where sampled, RSS summaries, sample
+count, and gate results. The aligned RSS samples remain in `raw/rss.json`. A
+missing required metric fails the harness. The fixed gates are completion p95
+`<10 ms`, Go RSS `<=50 MiB`, and combined RSS `<=150 MiB`. Linux and macOS
+failures are not waived for platform variance; Windows RSS is informational
+because the standard-library sampler is unavailable there.
 
 Inspect a captured profile directly:
 
@@ -178,43 +179,43 @@ go tool pprof -top -alloc_space benchmark-results/pprof/completion.heap.prof
 
 ### Reference Baseline
 
-Measured on 2026-07-31 at commit `2fa5cb6` plus the Milestone 9 working tree,
-Apple M1 arm64, macOS 26.5.2, Go 1.22.12, Python 3.11.10, and Django 5.2.16.
-Values are real warmed runs from `make bench`; host load and toolchain changes
-can affect informational values but not the fixed Linux/macOS gates.
+Measured on 2026-07-31 from tracked source at commit `ca86c19`, Apple M1 arm64,
+macOS 26.5.2, Go 1.22.12, Python 3.11.10, and Django 5.2.16. Values are real
+warmed runs from `make bench`; host load and toolchain changes can affect
+informational values but not the fixed Linux/macOS gates.
 
 | Profile | p50 | p95 | p99 | `ns/op` | `B/op` | allocations |
 |---|---:|---:|---:|---:|---:|---:|
-| Parse plus completion | 44.29 us | 51.46 us | 63.62 us | 45,558 | 36,978 | 111 |
-| Completion handler | N/A | N/A | N/A | 4,621 | 7,956 | 49 |
-| Hover handler | 2.88 us | 3.33 us | 6.21 us | 3,082 | 2,174 | 34 |
-| Diagnostics end-to-end | 11.67 us | 15.62 us | 19.38 us | 14,005 | 33,395 | 85 |
-| Definition | 23.62 us | 25.83 us | 30.04 us | 24,281 | 4,415 | 80 |
-| Document links | 91.71 us | 99.79 us | 106.40 us | 93,242 | 15,087 | 345 |
-| Dense 256-relation completion | 207.00 us | 506.40 us | 576.50 us | 232,797 | 311,858 | 4,381 |
-| 10,000-model completion | 3.46 us | 5.54 us | 7.21 us | 4,074 | 6,414 | 40 |
-| 100 KiB parse update | 11.68 ms | 14.98 ms | 14.98 ms | 12,318,338 | 8,610,690 | 1,124 |
-| 1,000-document snapshot | 1.42 ms | 3.65 ms | 3.65 ms | 1,699,017 | 314,680 | 3,004 |
-| Cache read | 0.04 us | 0.04 us | 0.04 us | 86.4 | 0 | 0 |
-| Snapshot swap under readers | 0.29 us | 0.33 us | 0.33 us | 339.8 | 24 | 1 |
+| Parse plus completion | 45.75 us | 58.67 us | 67.29 us | 48,558 | 37,123 | 112 |
+| Completion handler | N/A | N/A | N/A | 4,446 | 8,287 | 50 |
+| Hover handler | 3.08 us | 3.50 us | 3.96 us | 3,250 | 2,318 | 35 |
+| Diagnostics end-to-end | 12.08 us | 15.75 us | 20.79 us | 14,358 | 33,395 | 85 |
+| Definition | 24.67 us | 28.33 us | 40.67 us | 25,506 | 4,575 | 81 |
+| Document links | 92.75 us | 104.40 us | 120.00 us | 94,544 | 15,151 | 345 |
+| Dense 256-relation completion | 209.80 us | 496.80 us | 622.70 us | 233,817 | 311,649 | 4,382 |
+| 10,000-model completion | 3.75 us | 4.75 us | 10.71 us | 4,138 | 6,558 | 41 |
+| 100 KiB parse update | 11.72 ms | 15.02 ms | 15.02 ms | 12,516,625 | 9,266,335 | 2,104 |
+| 1,000-document snapshot | 0.53 ms | 2.37 ms | 2.37 ms | 879,179 | 331,080 | 3,004 |
+| Cache read | 0.04 us | 0.04 us | 0.04 us | 67.8 | 0 | 0 |
+| Snapshot swap under readers | 0.12 us | 0.33 us | 0.33 us | 222.3 | 24 | 1 |
 
 | Schema profile | Time | Bytes/op | Allocations/op |
 |---|---:|---:|---:|
-| 10 models | 166.50 us | 81,848 | 759 |
-| 1,000 models | 9.41 ms | 8,158,672 | 74,092 |
-| 10,000 models | 72.44 ms | 81,125,600 | 740,619 |
-| Dense 256-field model | 371.83 us | 431,968 | 1,421 |
+| 10 models | 726.12 us | 221,304 | 2,582 |
+| 1,000 models | 72.09 ms | 22,232,088 | 256,182 |
+| 10,000 models | 568.17 ms | 221,309,144 | 2,561,190 |
+| Dense 256-field model | 492.04 us | 445,840 | 1,604 |
 
 | Memory profile | Measured | Gate |
 |---|---:|---:|
-| Go RSS maximum | 19.56 MiB | `<=50 MiB` |
-| Python worker RSS maximum | 47.62 MiB | Informational |
-| Combined p50/p95/p99/maximum | 67.19 MiB | `<=150 MiB` |
+| Go RSS maximum | 19.67 MiB | `<=50 MiB` |
+| Python worker RSS maximum | 47.88 MiB | Informational |
+| Combined p50/p95/p99/maximum | 67.55 MiB | `<=150 MiB` |
 
-Typed schema cloning reduced the 10,000-model build from the pre-optimization
-profile's 340.47 ms and 201,471,736 B/op to 72.44 ms and 81,125,600 B/op.
-Parser pooling reduced parse-plus-completion p95 from the measured pre-change
-16.89-39.43 ms range to tens of microseconds on the reference fixture.
+Graph-build cases use one timed operation and are scaling indicators, not
+statistically stable latency distributions. LSP interaction cases use 200
+samples. The three-run fixture refresh measures Python introspection, IPC, and
+atomic graph replacement separately from editor hot-path requests.
 
 ## Compatibility Matrix
 
