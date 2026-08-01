@@ -73,7 +73,7 @@ def main() -> int:
 
     flags = go_test_flags()
     commands = [
-        ("lsp", ["go", "test", *flags, "-run", "^$", "-bench", "Benchmark(ParseUpdate|CompletionHandler|CompletionLatency|CompletionScale|HoverHandler|HoverScale|DiagnosticHandler|DiagnosticLatency|DiagnosticScale|DefinitionHandler|DocumentLinkHandler)$", "-benchmem", "-benchtime=200x", "./internal/lsp"]),
+        ("lsp", ["go", "test", *flags, "-run", "^$", "-bench", "Benchmark(ParseUpdate|CompletionHandler|CompletionLatency|CompletionScale|HoverHandler|HoverScale|DiagnosticHandler|DiagnosticLatency|DiagnosticScale|DefinitionHandler)$", "-benchmem", "-benchtime=200x", "./internal/lsp"]),
         ("analysis", ["go", "test", *flags, "-run", "^$", "-bench", "Benchmark(ParseUpdateMatrix|DocumentSnapshots)$", "-benchmem", "-benchtime=10x", "./internal/analysis"]),
         ("schema-build", ["go", "test", *flags, "-run", "^$", "-bench", "BenchmarkGraphBuild$", "-benchmem", "-benchtime=1x", "./internal/schema"]),
         ("schema-lookup", ["go", "test", *flags, "-run", "^$", "-bench", "BenchmarkGraphLookup$", "-benchmem", "-benchtime=1000x", "./internal/schema"]),

@@ -45,9 +45,8 @@ func (features *Features) Capabilities() protocol.ServerCapabilities {
 		CompletionProvider: &protocol.CompletionOptions{
 			TriggerCharacters: []string{".", "_", "\"", "'"},
 		},
-		HoverProvider:        true,
-		DefinitionProvider:   true,
-		DocumentLinkProvider: &protocol.DocumentLinkOptions{},
+		HoverProvider:      true,
+		DefinitionProvider: true,
 		SignatureHelpProvider: &protocol.SignatureHelpOptions{
 			TriggerCharacters:   []string{"(", ","},
 			RetriggerCharacters: []string{","},

@@ -56,8 +56,7 @@ Python tool, not replace it.
 | **Hover** | Django field class, database type and column, nullability, `db_index`, uniqueness, relation targets, and field help text |
 | **Signature help** | Cached signatures and docstrings for custom manager and `QuerySet` methods |
 | **Diagnostics** | Exact invalid path segments, non-relation traversal, invalid lookups, projections, and `select_related` targets |
-| **Navigation** | Definitions for models, fields, relations, reverse accessors, managers, custom methods, and individual path segments |
-| **Document links** | Static relation targets, `related_name` values, and resolvable ORM string paths |
+| **Navigation** | Exact definitions for models, fields, relation strings, reverse accessors, managers, custom methods, and individual path segments |
 | **Schema refresh** | Debounced reloads, atomic graph replacement, and last-valid-schema fallback when a refresh fails |
 
 ## Performance
@@ -78,7 +77,6 @@ separately in the full profile.
 | Diagnostics | Incremental edit, parse, analysis, and publish | `15.75 us` |
 | Definition | Loaded-cache handler | `28.33 us` |
 | Completion | Incremental edit, parse, and handler | `58.67 us` |
-| Document links | Loaded-cache handler | `104.40 us` |
 | Dense relation completion | 256 completion candidates | `496.80 us` |
 | Diagnostic scale | 100 invalid ORM expressions | `653.00 us` |
 
@@ -236,6 +234,14 @@ Order.objects.select_related("customer__profile")
 Order.objects.prefetch_related("items__product")
 ```
 
+Inside `@admin.register(Model)` admin classes, Pogo also follows
+`super().get_queryset(...)` chains for related-loading completion and
+navigation.
+
+The VS Code extension retriggers suggestions after `__` is typed inside a
+single-line Python string, working around VS Code's disabled-by-default quick
+suggestions in strings.
+
 Lookup suggestions come from the active Django field registry. Pogo also checks
 the default database's JSON containment capability and omits `contains` and
 `contained_by` when that backend does not support them.
@@ -261,9 +267,9 @@ annotations help Pogo continue inference through custom chains.
 ### Navigate Schema-Backed Code
 
 Go to definition works on model imports, fields, relation segments, reverse
-accessors, managers, and custom methods. Static `ForeignKey`, `OneToOneField`,
-`ManyToManyField`, and `related_name` strings become document links when their
-source remains current.
+accessors, managers, custom methods, and static `ForeignKey`, `OneToOneField`,
+`ManyToManyField`, and `related_name` strings. Navigation includes the exact
+target range when its source remains current.
 
 ### Refresh Without Blocking Editing
 

@@ -14,16 +14,10 @@ type ORMIssue struct {
 	Range   ByteRange
 }
 
-type StaticPathReference struct {
-	Segment PathSegment
-	Field   *schema.FieldRef
-}
-
 type staticORMPath struct {
 	value    Value
 	mode     PathMode
 	segments []PathSegment
-	isString bool
 }
 
 func DiagnoseORM(snapshot Snapshot, graph *schema.Graph) []ORMIssue {
@@ -53,29 +47,6 @@ func DiagnoseORM(snapshot Snapshot, graph *schema.Graph) []ORMIssue {
 	return issues
 }
 
-func ResolveStaticORMPathReferences(snapshot Snapshot, graph *schema.Graph) []StaticPathReference {
-	var references []StaticPathReference
-	for _, path := range staticORMPaths(snapshot, graph) {
-		if !path.isString {
-			continue
-		}
-		for index, segment := range path.segments {
-			resolved, ok := ResolvePathSegment(graph, path.value.CanonicalLabel, path.mode, path.segments, index)
-			if !ok || resolved.Field == nil {
-				break
-			}
-			references = append(references, StaticPathReference{Segment: segment, Field: resolved.Field})
-		}
-	}
-	sort.SliceStable(references, func(left, right int) bool {
-		if references[left].Segment.Range.Start != references[right].Segment.Range.Start {
-			return references[left].Segment.Range.Start < references[right].Segment.Range.Start
-		}
-		return references[left].Segment.Range.End < references[right].Segment.Range.End
-	})
-	return references
-}
-
 func staticORMPaths(snapshot Snapshot, graph *schema.Graph) []staticORMPath {
 	if graph == nil || !snapshot.Parsed {
 		return nil
@@ -86,9 +57,9 @@ func staticORMPaths(snapshot Snapshot, graph *schema.Graph) []staticORMPath {
 		if !supported || call.Receiver.Start < 0 || call.Receiver.End > len(snapshot.Source) || call.Receiver.Start >= call.Receiver.End {
 			continue
 		}
-		value := inferExpression(
+		value := inferExpressionAtPath(
 			strings.TrimSpace(string(snapshot.Source[call.Receiver.Start:call.Receiver.End])),
-			snapshot.Source[:call.Range.Start], graph, snapshot.Syntax, call.Range.Start,
+			snapshot.Source[:call.Range.Start], graph, snapshot.Syntax, call.Range.Start, snapshot.FilePath,
 		)
 		if value.Kind != ValueManager && value.Kind != ValueQuerySet {
 			continue
@@ -111,7 +82,7 @@ func staticORMPaths(snapshot Snapshot, graph *schema.Graph) []staticORMPath {
 			if !ok || len(segments) > MaxPathSegments {
 				continue
 			}
-			paths = append(paths, staticORMPath{value: value, mode: mode, segments: segments, isString: stringPaths})
+			paths = append(paths, staticORMPath{value: value, mode: mode, segments: segments})
 		}
 	}
 	return paths

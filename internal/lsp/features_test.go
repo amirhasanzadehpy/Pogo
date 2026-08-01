@@ -229,6 +229,7 @@ func TestDeepPathCompletionHoverAndCustomMethods(t *testing.T) {
 		{"only", "from myapp.models import Book\nBook.objects.only(\"author__na|\")", []string{"name"}},
 		{"select related", "from myapp.models import Book\nBook.objects.select_related(\"author__pro|\")", []string{"profile"}},
 		{"prefetch related", "from myapp.models import Book\nBook.objects.prefetch_related(\"sto|\")", []string{"store_set"}},
+		{"prefetch related after dunder", "from myapp.models import Book\nBook.objects.prefetch_related(\"author__|\")", []string{"profile"}},
 		{"queryset method", "from myapp.models import Book\nBook.objects.ac|", []string{"active"}},
 		{"manager method", "from myapp.models import Book\nBook.catalog.fea|", []string{"featured"}},
 	}
@@ -423,9 +424,6 @@ func TestCompletionAndHoverDoNotRequestStoppedWorker(t *testing.T) {
 	definitionPosition, _ := analysis.PositionAt(source, definitionOffset)
 	if _, err := features.Definition(uri, definitionPosition); err != nil {
 		t.Fatalf("Definition() with stopped worker error = %v", err)
-	}
-	if _, err := features.DocumentLinks(uri); err != nil {
-		t.Fatalf("DocumentLinks() with stopped worker error = %v", err)
 	}
 	if got := manager.RequestCount(); got != requestsAfterStop {
 		t.Fatalf("worker requests after cached feature handlers = %d, want %d", got, requestsAfterStop)

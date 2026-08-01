@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -26,13 +25,6 @@ func (features *Features) definition(_ *glsp.Context, params *protocol.Definitio
 	return features.Definition(string(params.TextDocument.URI), analysisPosition(params.Position))
 }
 
-func (features *Features) documentLink(_ *glsp.Context, params *protocol.DocumentLinkParams) ([]protocol.DocumentLink, error) {
-	if features == nil || params == nil {
-		return []protocol.DocumentLink{}, nil
-	}
-	return features.DocumentLinks(string(params.TextDocument.URI))
-}
-
 func (features *Features) Definition(uri string, position analysis.Position) (*protocol.Location, error) {
 	snapshot, ok := features.documents.Snapshot(uri)
 	if !ok {
@@ -47,7 +39,10 @@ func (features *Features) Definition(uri string, position analysis.Position) (*p
 	if filePath == "" {
 		filePath, _ = localFilePath(uri)
 	}
-	sourceRange, ok := analysis.ResolveDefinitionSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, filePath)
+	sourceRange, ok := analysis.ResolveRelationStringDefinition(snapshot, filePath, graph, offset)
+	if !ok {
+		sourceRange, ok = analysis.ResolveDefinitionSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, filePath)
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -56,69 +51,6 @@ func (features *Features) Definition(uri string, position analysis.Position) (*p
 		return nil, nil
 	}
 	return &location, nil
-}
-
-func (features *Features) DocumentLinks(uri string) ([]protocol.DocumentLink, error) {
-	links := make([]protocol.DocumentLink, 0)
-	snapshot, ok := features.documents.Snapshot(uri)
-	if !ok {
-		return links, nil
-	}
-	graph, _ := features.cache.Load()
-	if graph == nil {
-		return links, nil
-	}
-
-	appendLink := func(byteRange analysis.ByteRange, target schema.SourceRange) {
-		range_, valid := protocolRange(snapshot.Source, byteRange)
-		if !valid {
-			return
-		}
-		location, valid := features.sourceLocation(target)
-		if !valid {
-			return
-		}
-		targetURI := location.URI
-		links = append(links, protocol.DocumentLink{Range: range_, Target: &targetURI})
-	}
-	for _, reference := range analysis.ResolveStaticORMPathReferences(snapshot, graph) {
-		if sourceRange, exists := reference.Field.SourceRange(); exists {
-			appendLink(reference.Segment.Range, sourceRange)
-		}
-	}
-	if filePath, exists := localFilePath(uri); exists {
-		for _, reference := range analysis.ResolveRelationStringReferences(snapshot, filePath, graph) {
-			if sourceRange, found := graph.ModelSourceRange(reference.TargetModel); found {
-				appendLink(reference.Range, sourceRange)
-			}
-		}
-	}
-	sort.SliceStable(links, func(left, right int) bool {
-		if links[left].Range.Start.Line != links[right].Range.Start.Line {
-			return links[left].Range.Start.Line < links[right].Range.Start.Line
-		}
-		if links[left].Range.Start.Character != links[right].Range.Start.Character {
-			return links[left].Range.Start.Character < links[right].Range.Start.Character
-		}
-		if links[left].Range.End.Line != links[right].Range.End.Line {
-			return links[left].Range.End.Line < links[right].Range.End.Line
-		}
-		if links[left].Range.End.Character != links[right].Range.End.Character {
-			return links[left].Range.End.Character < links[right].Range.End.Character
-		}
-		return string(*links[left].Target) < string(*links[right].Target)
-	})
-	if len(links) > 1 {
-		unique := links[:1]
-		for _, link := range links[1:] {
-			previous := unique[len(unique)-1]
-			if previous.Range != link.Range || *previous.Target != *link.Target {
-				unique = append(unique, link)
-			}
-		}
-		links = unique
-	}
-	return links, nil
 }
 
 func (features *Features) sourceLocation(sourceRange schema.SourceRange) (protocol.Location, bool) {

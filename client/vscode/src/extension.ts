@@ -38,10 +38,81 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // workspace-folder ownership changes.
       scheduleReconcile(true);
     }),
+    vscode.workspace.onDidChangeTextDocument(scheduleStringPathCompletion),
   );
 
   scheduleReconcile(false);
   await lifecycle;
+}
+
+function scheduleStringPathCompletion(
+  event: vscode.TextDocumentChangeEvent,
+): void {
+  if (
+    shuttingDown ||
+    clients.size === 0 ||
+    event.document.languageId !== 'python' ||
+    event.contentChanges.length !== 1
+  ) {
+    return;
+  }
+  const change = event.contentChanges[0];
+  if (change === undefined || change.text !== '_' || change.rangeLength !== 0) {
+    return;
+  }
+  const position = change.range.start.translate(0, 1);
+  const line = event.document.lineAt(position.line).text;
+  if (
+    position.character < 2 ||
+    line.slice(position.character - 2, position.character) !== '__' ||
+    !insideSingleLineString(line, position.character)
+  ) {
+    return;
+  }
+
+  // VS Code treats '_' as a word character, so its disabled-in-strings quick
+  // suggestion path can suppress the LSP trigger registered by Pogo.
+  setTimeout(() => {
+    const editor = vscode.window.activeTextEditor;
+    if (
+      shuttingDown ||
+      editor === undefined ||
+      editor.document.uri.toString() !== event.document.uri.toString() ||
+      !editor.selection.active.isEqual(position)
+    ) {
+      return;
+    }
+    void vscode.commands.executeCommand('editor.action.triggerSuggest');
+  }, 0);
+}
+
+function insideSingleLineString(line: string, end: number): boolean {
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  for (let index = 0; index < end; index++) {
+    const character = line[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '#') {
+      return false;
+    }
+    if (character !== '"' && character !== "'") {
+      continue;
+    }
+    if (line.slice(index, index + 3) === character.repeat(3)) {
+      return false;
+    }
+    quote = character;
+  }
+  return quote !== undefined;
 }
 
 export async function deactivate(): Promise<void> {
@@ -219,10 +290,6 @@ async function createClient(
       provideDefinition: (document, position, token, next) =>
         ownsDocument(target, document.uri)
           ? next(document, position, token)
-          : null,
-      provideDocumentLinks: (document, token, next) =>
-        ownsDocument(target, document.uri)
-          ? next(document, token)
           : null,
       handleDiagnostics: (uri, diagnostics, next) => {
         if (ownsDocument(target, uri)) {

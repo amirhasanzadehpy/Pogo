@@ -39,7 +39,7 @@ make clean
 completed. It checks Go formatting, runs `go vet`, runs Go tests, and runs both
 the fixture and daemon standard-library Python suites. `make test-race` runs the
 Go suite with race detection. `make bench` measures parse-update, completion,
-diagnostic, definition, and document-link handlers; end-to-end p50/p95; schema
+diagnostic and definition handlers; end-to-end p50/p95; schema
 refresh; graph lookup; and server/worker RSS.
 
 `make fuzz` runs 30-second campaigns for worker and LSP framing, UTF-16
@@ -93,12 +93,11 @@ executing project methods. These hot handlers continue to use the last valid
 cache when the worker is unavailable and never issue worker requests.
 
 Definition navigation uses the same cache-only resolver for model imports,
-fields, relations, managers, custom methods, and individual ORM path segments.
-Inherited and reverse fields retain their originating declaration, while lookup
-and transform suffixes target the underlying field. Document links cover static
-relation-target and `related_name` strings in model declarations and resolvable
-schema-backed string query paths. Targets are absolute percent-encoded file URIs;
-missing or stale source files are omitted without failing the request.
+fields, relations, managers, custom methods, individual ORM path segments, and
+static relation-target and `related_name` strings. Inherited and reverse fields
+retain their originating declaration, while lookup and transform suffixes target
+the underlying field. Targets are exact ranges in absolute percent-encoded file
+URIs; missing or stale source files are omitted without failing the request.
 
 Completed static ORM paths are validated locally on open, change, and save.
 Diagnostics use stable `django-orm.*` codes, exact UTF-16 segment ranges, and the
@@ -146,7 +145,7 @@ forming an impractical Cartesian product:
 | Document size | 1 KiB and 100 KiB incremental updates |
 | Open documents | 1, 100, and 1,000 snapshots |
 | Cache concurrency | Parallel reads, swaps, and swaps under active readers |
-| LSP handlers | Completion, hover, diagnostics, definition, document links |
+| LSP handlers | Completion, hover, diagnostics, definition |
 
 Results are written to:
 
@@ -191,7 +190,6 @@ informational values but not the fixed Linux/macOS gates.
 | Hover handler | 3.08 us | 3.50 us | 3.96 us | 3,250 | 2,318 | 35 |
 | Diagnostics end-to-end | 12.08 us | 15.75 us | 20.79 us | 14,358 | 33,395 | 85 |
 | Definition | 24.67 us | 28.33 us | 40.67 us | 25,506 | 4,575 | 81 |
-| Document links | 92.75 us | 104.40 us | 120.00 us | 94,544 | 15,151 | 345 |
 | Dense 256-relation completion | 209.80 us | 496.80 us | 622.70 us | 233,817 | 311,649 | 4,382 |
 | 10,000-model completion | 3.75 us | 4.75 us | 10.71 us | 4,138 | 6,558 | 41 |
 | 100 KiB parse update | 11.72 ms | 15.02 ms | 15.02 ms | 12,516,625 | 9,266,335 | 2,104 |

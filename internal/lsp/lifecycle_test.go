@@ -249,7 +249,7 @@ func TestFeatureCapabilitiesAndDocumentNotifications(t *testing.T) {
 	if !ok || saveOptions.IncludeText == nil || !*saveOptions.IncludeText {
 		t.Fatalf("save capability = %#v", syncOptions.Save)
 	}
-	if initialized.Capabilities.CompletionProvider == nil || initialized.Capabilities.HoverProvider != true || initialized.Capabilities.DefinitionProvider != true || initialized.Capabilities.DocumentLinkProvider == nil || initialized.Capabilities.SignatureHelpProvider == nil {
+	if initialized.Capabilities.CompletionProvider == nil || initialized.Capabilities.HoverProvider != true || initialized.Capabilities.DefinitionProvider != true || initialized.Capabilities.DocumentLinkProvider != nil || initialized.Capabilities.SignatureHelpProvider == nil {
 		t.Fatalf("feature capabilities = %#v", initialized.Capabilities)
 	}
 	if got := initialized.Capabilities.CompletionProvider.TriggerCharacters; strings.Join(got, "") != "._\"'" {
@@ -284,12 +284,6 @@ func TestFeatureCapabilitiesAndDocumentNotifications(t *testing.T) {
 	_, definitionOK := result.(*protocol.Location)
 	if err != nil || !validMethod || !validParams || result != nil && !definitionOK {
 		t.Fatalf("definition = (%T, %v, %v, %v)", result, validMethod, validParams, err)
-	}
-	documentLinkParams := json.RawMessage(`{"textDocument":{"uri":"file:///feature.py"}}`)
-	result, validMethod, validParams, err = lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDocumentLink, Params: documentLinkParams})
-	links, ok := result.([]protocol.DocumentLink)
-	if err != nil || !validMethod || !validParams || !ok || len(links) != 0 {
-		t.Fatalf("document links = (%T, %v, %v, %v)", result, validMethod, validParams, err)
 	}
 	signatureOpen := json.RawMessage(`{"textDocument":{"uri":"file:///signature.py","languageId":"python","version":1,"text":"from myapp.models import Book\nBook.objects.active(limit=)"}}`)
 	if _, validMethod, validParams, err := lifecycle.Handle(&glsp.Context{Method: protocol.MethodTextDocumentDidOpen, Params: signatureOpen}); err != nil || !validMethod || !validParams {

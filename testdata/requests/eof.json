@@ -24,8 +24,7 @@
             "completionProvider": {"triggerCharacters": [".", "_", "\"", "'"]},
             "hoverProvider": true,
             "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]},
-            "definitionProvider": true,
-            "documentLinkProvider": {}
+            "definitionProvider": true
           },
           "serverInfo": {
             "name": "pogo",

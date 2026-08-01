@@ -3,6 +3,7 @@ package analysis
 import (
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -45,6 +46,88 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestModelAdminGetQuerySetPaths(t *testing.T) {
+	graph := pathTestGraph(t)
+	tests := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{name: "select related", path: `"author__pro|"`, want: []string{"profile"}},
+		{name: "prefetch related", path: `"author__bo|"`, want: []string{"books"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, offset := sourceAtCursor(t, modelAdminQuerySetSource(test.path))
+			store := newTestStore(t)
+			if err := store.Open("file:///admin.py", 1, string(source)); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, _ := store.Snapshot("file:///admin.py")
+			context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, snapshot.FilePath)
+			if !ok || context.Kind != ContextORMPath || context.Path == nil || context.Value.CanonicalLabel != "myapp.Book" {
+				t.Fatalf("AnalyzeSyntaxFile() = %#v, %v", context, ok)
+			}
+			candidates := CompletePath(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment)
+			got := make([]string, len(candidates))
+			for index, candidate := range candidates {
+				got[index] = candidate.Name
+			}
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("candidates = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestModelAdminGetQuerySetPathNavigation(t *testing.T) {
+	graph := pathTestGraph(t)
+	source, offset := sourceAtCursor(t, modelAdminQuerySetSource(`"author__pro|file"`))
+	store := newTestStore(t)
+	if err := store.Open("file:///admin.py", 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot("file:///admin.py")
+	if sourceRange, ok := ResolveDefinitionSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, snapshot.FilePath); !ok || sourceRange.FilePath == "" {
+		t.Fatalf("ResolveDefinitionSyntaxFile() = %#v, %v", sourceRange, ok)
+	}
+
+}
+
+func TestModelAdminGetQuerySetRequiresDjangoAdminRegistration(t *testing.T) {
+	graph := pathTestGraph(t)
+	source, offset := sourceAtCursor(t, strings.Replace(modelAdminQuerySetSource(`"author__pro|"`), "@admin.register(Book)", "@registry.register(Book)", 1))
+	store := newTestStore(t)
+	if err := store.Open("file:///admin.py", 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot("file:///admin.py")
+	if context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, snapshot.FilePath); ok {
+		t.Fatalf("unrelated register decorator inferred as %#v", context)
+	}
+}
+
+func modelAdminQuerySetSource(activePath string) string {
+	selectPath := `"author__profile"`
+	prefetchPath := `"author__books"`
+	if strings.Contains(activePath, "pro") {
+		selectPath = activePath
+	} else {
+		prefetchPath = activePath
+	}
+	return "from django.contrib import admin\n" +
+		"from myapp.models import Book\n\n" +
+		"@admin.register(Book)\n" +
+		"class BookAdmin(admin.ModelAdmin):\n" +
+		"    def get_queryset(self, request):\n" +
+		"        return (\n" +
+		"            super()\n" +
+		"            .get_queryset(request)\n" +
+		"            .select_related(" + selectPath + ")\n" +
+		"            .prefetch_related(" + prefetchPath + ")\n" +
+		"        )\n"
 }
 
 func FuzzORMPathExtraction(f *testing.F) {

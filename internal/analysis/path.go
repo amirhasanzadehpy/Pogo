@@ -104,7 +104,7 @@ type PathIssue struct {
 	Field   *schema.FieldRef
 }
 
-func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement) (Context, bool) {
+func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
 	call, ok := enclosingCall(source, offset)
 	if !ok {
 		return Context{}, false
@@ -113,7 +113,7 @@ func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax [
 	if !ok {
 		return Context{}, false
 	}
-	value := inferExpression(strings.TrimSpace(string(source[call.receiver.Start:call.receiver.End])), source[:offset], graph, syntax, offset)
+	value := inferExpressionAtPath(strings.TrimSpace(string(source[call.receiver.Start:call.receiver.End])), source[:offset], graph, syntax, offset, filePath)
 	if value.Kind != ValueManager && value.Kind != ValueQuerySet {
 		return Context{}, false
 	}

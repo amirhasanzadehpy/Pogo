@@ -1,7 +1,8 @@
 # Pogo for VS Code
 
 Pogo adds Django ORM completion, hover information, signature help,
-diagnostics, definitions, and document links to Python files.
+diagnostics and exact definitions to Python files. The extension automatically
+retriggers suggestions after `__` inside single-line Python strings.
 
 Install `pogo` on the extension host's `PATH`, then open a trusted
 Django workspace. For a local source build, set **Pogo: Executable Path** to

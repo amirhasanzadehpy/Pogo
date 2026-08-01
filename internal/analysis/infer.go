@@ -63,7 +63,10 @@ var (
 	forBindingPattern        = regexp.MustCompile(`(?m)\bfor\s+([^:\n]+?)\s+in\b`)
 	asBindingPattern         = regexp.MustCompile(`(?m)\bas\s+(\([^\n)]*\)|[A-Za-z_][A-Za-z0-9_]*)`)
 	walrusBindingPattern     = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*:=`)
+	adminRegisterPattern     = regexp.MustCompile(`^@([A-Za-z_][A-Za-z0-9_.]*)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)\s*$`)
 )
+
+const adminQuerySetBinding = "__pogo_admin_queryset__"
 
 func Analyze(source []byte, offset int, graph *schema.Graph) (Context, bool) {
 	return analyze(source, offset, graph, nil, "")
@@ -81,7 +84,7 @@ func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStat
 	if graph == nil || offset < 0 || offset > len(source) {
 		return Context{}, false
 	}
-	if context, ok := analyzePathContext(source, offset, graph, syntax); ok {
+	if context, ok := analyzePathContext(source, offset, graph, syntax, filePath); ok {
 		return context, true
 	}
 	replacement := identifierRange(source, offset)
@@ -255,6 +258,9 @@ func keywordNamePosition(source []byte, argumentsStart, identifierStart int) boo
 
 func expressionBefore(source []byte, end int) ByteRange {
 	start := end
+	for start > 0 && isSpace(source[start-1]) {
+		start--
+	}
 	depth := 0
 	for start > 0 {
 		value := source[start-1]
@@ -269,6 +275,16 @@ func expressionBefore(source []byte, end int) ByteRange {
 			depth--
 			start--
 		default:
+			if depth == 0 && isSpace(value) {
+				spaceStart := start - 1
+				for spaceStart > 0 && isSpace(source[spaceStart-1]) {
+					spaceStart--
+				}
+				if start < end && source[start] == '.' && spaceStart > 0 && source[spaceStart-1] == ')' {
+					start = spaceStart
+					continue
+				}
+			}
 			if depth == 0 && !isIdentifierByte(value) && value != '.' {
 				return ByteRange{Start: start, End: end}
 			}
@@ -312,6 +328,12 @@ func inferExpression(expression string, sourcePrefix []byte, graph *schema.Graph
 
 func inferExpressionAtPath(expression string, sourcePrefix []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int, filePath string) Value {
 	imports, values := buildEnvironmentAtPath(sourcePrefix, graph, syntax, offset, filePath)
+	if rewritten, ok := rewriteAdminQuerySetExpression(expression); ok {
+		if label, registered := enclosingAdminModelLabel(sourcePrefix, syntax, offset, imports, graph); registered {
+			values[adminQuerySetBinding] = Value{CanonicalLabel: label, Kind: ValueQuerySet}
+			expression = rewritten
+		}
+	}
 	return resolveExpression(expression, imports, values, graph)
 }
 
@@ -459,28 +481,8 @@ func enclosingModelLabel(syntax []SyntaxStatement, offset int, filePath string, 
 	if graph == nil || filePath == "" {
 		return "", false
 	}
-	current := SyntaxStatement{}
-	for _, statement := range syntax {
-		if !statement.ScopeMarker || statement.ScopeStart > offset || offset > statement.ScopeEnd {
-			continue
-		}
-		if current.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < current.ScopeEnd-current.ScopeStart {
-			current = statement
-		}
-	}
-	if current.ScopeKind != "function_definition" {
-		return "", false
-	}
-	parent := SyntaxStatement{}
-	for _, statement := range syntax {
-		if !statement.ScopeMarker || statement.Start == current.Start && statement.End == current.End || statement.ScopeStart > current.ScopeStart || current.ScopeEnd > statement.ScopeEnd {
-			continue
-		}
-		if parent.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < parent.ScopeEnd-parent.ScopeStart {
-			parent = statement
-		}
-	}
-	if parent.ScopeKind != "class_definition" {
+	current, parent, ok := enclosingFunctionAndClass(syntax, offset)
+	if !ok {
 		return "", false
 	}
 	var classes []SyntaxStatement
@@ -503,10 +505,100 @@ func enclosingModelLabel(syntax []SyntaxStatement, offset int, filePath string, 
 		}
 		qualname = append(qualname, match[1])
 	}
-	if len(qualname) == 0 {
+	if len(qualname) == 0 || parent.ScopeKind != "class_definition" {
 		return "", false
 	}
 	return graph.CanonicalLabelForSourceClass(filePath, strings.Join(qualname, "."))
+}
+
+func enclosingFunctionAndClass(syntax []SyntaxStatement, offset int) (SyntaxStatement, SyntaxStatement, bool) {
+	current := SyntaxStatement{}
+	for _, statement := range syntax {
+		if !statement.ScopeMarker || statement.ScopeStart > offset || offset > statement.ScopeEnd {
+			continue
+		}
+		if current.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < current.ScopeEnd-current.ScopeStart {
+			current = statement
+		}
+	}
+	if current.ScopeKind != "function_definition" {
+		return SyntaxStatement{}, SyntaxStatement{}, false
+	}
+	parent := SyntaxStatement{}
+	for _, statement := range syntax {
+		if !statement.ScopeMarker || statement.Start == current.Start && statement.End == current.End || statement.ScopeStart > current.ScopeStart || current.ScopeEnd > statement.ScopeEnd {
+			continue
+		}
+		if parent.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < parent.ScopeEnd-parent.ScopeStart {
+			parent = statement
+		}
+	}
+	if parent.ScopeKind != "class_definition" {
+		return SyntaxStatement{}, SyntaxStatement{}, false
+	}
+	return current, parent, true
+}
+
+func enclosingAdminModelLabel(source []byte, syntax []SyntaxStatement, offset int, imports map[string]string, graph *schema.Graph) (string, bool) {
+	current, class, ok := enclosingFunctionAndClass(syntax, offset)
+	if !ok || graph == nil || class.ScopeStart < 0 || class.ScopeStart > len(source) {
+		return "", false
+	}
+	function := definitionBindingPattern.FindStringSubmatch(current.Text)
+	if function == nil || function[1] != "get_queryset" {
+		return "", false
+	}
+	cursor := bytes.LastIndexByte(source[:class.ScopeStart], '\n') + 1
+	for cursor > 0 {
+		lineEnd := cursor - 1
+		lineStart := bytes.LastIndexByte(source[:lineEnd], '\n') + 1
+		line := strings.TrimSpace(string(source[lineStart:lineEnd]))
+		if !strings.HasPrefix(line, "@") {
+			break
+		}
+		match := adminRegisterPattern.FindStringSubmatch(line)
+		if match != nil && expandImport(match[1], imports) == "django.contrib.admin.register" {
+			return resolveClass(match[2], imports, graph)
+		}
+		cursor = lineStart
+	}
+	return "", false
+}
+
+func rewriteAdminQuerySetExpression(expression string) (string, bool) {
+	position := skipExpressionSpace(expression, 0)
+	if !strings.HasPrefix(expression[position:], "super") {
+		return "", false
+	}
+	position += len("super")
+	position = skipExpressionSpace(expression, position)
+	if position >= len(expression) || expression[position] != '(' {
+		return "", false
+	}
+	end, ok := skipCall(expression, position)
+	if !ok || strings.TrimSpace(expression[position+1:end-1]) != "" {
+		return "", false
+	}
+	position = skipExpressionSpace(expression, end)
+	if position >= len(expression) || expression[position] != '.' {
+		return "", false
+	}
+	position++
+	position = skipExpressionSpace(expression, position)
+	const method = "get_queryset"
+	if !strings.HasPrefix(expression[position:], method) {
+		return "", false
+	}
+	position += len(method)
+	position = skipExpressionSpace(expression, position)
+	if position >= len(expression) || expression[position] != '(' {
+		return "", false
+	}
+	end, ok = skipCall(expression, position)
+	if !ok {
+		return "", false
+	}
+	return adminQuerySetBinding + expression[end:], true
 }
 
 func importBindingNames(line string) []string {

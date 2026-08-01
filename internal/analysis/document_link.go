@@ -73,6 +73,18 @@ func ResolveRelationStringReferences(snapshot Snapshot, filePath string, graph *
 	return references
 }
 
+func ResolveRelationStringDefinition(snapshot Snapshot, filePath string, graph *schema.Graph, offset int) (schema.SourceRange, bool) {
+	if offset < 0 || offset > len(snapshot.Source) {
+		return schema.SourceRange{}, false
+	}
+	for _, reference := range ResolveRelationStringReferences(snapshot, filePath, graph) {
+		if reference.Range.Start <= offset && offset < reference.Range.End {
+			return graph.ModelSourceRange(reference.TargetModel)
+		}
+	}
+	return schema.SourceRange{}, false
+}
+
 func isRelationConstructor(snapshot Snapshot, graph *schema.Graph, call SyntaxCall) bool {
 	if call.Range.Start < 0 || call.Range.Start > len(snapshot.Source) {
 		return false

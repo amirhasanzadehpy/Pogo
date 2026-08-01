@@ -134,72 +134,42 @@ func TestDefinitionRejectsUnsavedTargetChanges(t *testing.T) {
 	}
 }
 
-func TestDocumentLinksResolveQueryPathsAndRelationStrings(t *testing.T) {
+func TestDefinitionResolvesRelationStringsToExactModelRange(t *testing.T) {
 	features, modelsPath := navigationTestFeatures(t)
 	defer features.Close()
-
-	queryURI := "file:///workspace/links.py"
-	query := "from myapp.models import Book\nBook.objects.values(\"author__name\", \"title__lower\")\n"
-	if err := features.documents.Open(queryURI, 1, query); err != nil {
-		t.Fatal(err)
+	uri := mustSourceFileURI(t, modelsPath)
+	tests := []string{
+		strings.Replace(navigationModelsSource, `"Author"`, `"Au|thor"`, 1),
+		strings.Replace(navigationModelsSource, `related_name="books"`, `related_name="bo|oks"`, 1),
 	}
-	links, err := features.DocumentLinks(queryURI)
-	if err != nil || len(links) != 4 {
-		t.Fatalf("DocumentLinks() = %#v, %v", links, err)
-	}
-	wantRanges := []protocol.Range{
-		{Start: protocol.Position{Line: 1, Character: 21}, End: protocol.Position{Line: 1, Character: 27}},
-		{Start: protocol.Position{Line: 1, Character: 29}, End: protocol.Position{Line: 1, Character: 33}},
-		{Start: protocol.Position{Line: 1, Character: 37}, End: protocol.Position{Line: 1, Character: 42}},
-		{Start: protocol.Position{Line: 1, Character: 44}, End: protocol.Position{Line: 1, Character: 49}},
-	}
-	wantURI := protocol.DocumentUri(mustSourceFileURI(t, modelsPath))
-	for index, link := range links {
-		if link.Range != wantRanges[index] || link.Target == nil || *link.Target != wantURI {
-			t.Errorf("link %d = %#v", index, link)
+	wantRange := protocol.Range{Start: protocol.Position{Line: 1}, End: protocol.Position{Line: 2, Character: 29}}
+	for index, sourceWithCursor := range tests {
+		source, position := lspSourceAtCursor(t, sourceWithCursor)
+		if err := features.documents.Open(uri, int32(index+1), string(source)); err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	modelsURI := string(wantURI)
-	if err := features.documents.Open(modelsURI, 1, navigationModelsSource); err != nil {
-		t.Fatal(err)
-	}
-	links, err = features.DocumentLinks(modelsURI)
-	if err != nil || len(links) != 2 {
-		t.Fatalf("model DocumentLinks() = %#v, %v", links, err)
-	}
-	for _, link := range links {
-		if link.Target == nil || *link.Target != wantURI {
-			t.Errorf("relation link = %#v", link)
+		location, err := features.Definition(uri, position)
+		if err != nil || location == nil || location.URI != protocol.DocumentUri(uri) || location.Range != wantRange {
+			t.Fatalf("Definition() = %#v, %v; want range %#v", location, err, wantRange)
 		}
-	}
-	if got := navigationModelsSource[byteOffsetForProtocolPosition(t, []byte(navigationModelsSource), links[0].Range.Start):byteOffsetForProtocolPosition(t, []byte(navigationModelsSource), links[0].Range.End)]; got != "Author" {
-		t.Errorf("relation target link text = %q", got)
-	}
-	if got := navigationModelsSource[byteOffsetForProtocolPosition(t, []byte(navigationModelsSource), links[1].Range.Start):byteOffsetForProtocolPosition(t, []byte(navigationModelsSource), links[1].Range.End)]; got != "books" {
-		t.Errorf("related_name link text = %q", got)
-	}
-	staleDeclaration := strings.Replace(navigationModelsSource, "\"Author\"", "\"Publisher\"", 1)
-	if err := features.documents.Change(modelsURI, 2, []analysis.Change{{Text: staleDeclaration}}); err != nil {
-		t.Fatal(err)
-	}
-	if links, err := features.DocumentLinks(modelsURI); err != nil || len(links) != 0 {
-		t.Fatalf("stale declaration links = %#v, %v", links, err)
+		features.documents.Close(uri)
 	}
 }
 
-func TestDocumentLinksRecognizeImportedRelationConstructor(t *testing.T) {
+func TestDefinitionRecognizesImportedRelationConstructor(t *testing.T) {
 	source := strings.Replace(navigationModelsSource, "from django.db import models", "from django.db.models import ForeignKey as FK", 1)
 	source = strings.Replace(source, "models.ForeignKey", "FK", 1)
+	sourceWithCursor := strings.Replace(source, `"Author"`, `"Au|thor"`, 1)
 	features, modelsPath := navigationTestFeaturesWithSource(t, source)
 	defer features.Close()
 	uri := mustSourceFileURI(t, modelsPath)
-	if err := features.documents.Open(uri, 1, source); err != nil {
+	document, position := lspSourceAtCursor(t, sourceWithCursor)
+	if err := features.documents.Open(uri, 1, string(document)); err != nil {
 		t.Fatal(err)
 	}
-	links, err := features.DocumentLinks(uri)
-	if err != nil || len(links) != 2 {
-		t.Fatalf("imported-constructor DocumentLinks() = %#v, %v", links, err)
+	location, err := features.Definition(uri, position)
+	if err != nil || location == nil || location.Range.Start.Line != 1 {
+		t.Fatalf("imported-constructor Definition() = %#v, %v", location, err)
 	}
 }
 
@@ -315,21 +285,6 @@ func BenchmarkDefinitionHandler(b *testing.B) {
 	})
 }
 
-func BenchmarkDocumentLinkHandler(b *testing.B) {
-	features, _ := navigationTestFeatures(b)
-	defer features.Close()
-	uri := "file:///workspace/link-benchmark.py"
-	source := "from myapp.models import Book\nBook.objects.values(\"author__name\", \"title__lower\")\n"
-	if err := features.documents.Open(uri, 1, source); err != nil {
-		b.Fatal(err)
-	}
-	benchmarkNavigationLatency(b, func() {
-		if links, err := features.DocumentLinks(uri); err != nil || len(links) != 4 {
-			b.Fatalf("DocumentLinks() = %#v, %v", links, err)
-		}
-	})
-}
-
 func benchmarkNavigationLatency(b *testing.B, run func()) {
 	b.Helper()
 	totals := make([]time.Duration, b.N)
@@ -352,13 +307,4 @@ type navigationTestingT interface {
 	Fatal(args ...any)
 	Fatalf(format string, args ...any)
 	TempDir() string
-}
-
-func byteOffsetForProtocolPosition(t *testing.T, source []byte, position protocol.Position) int {
-	t.Helper()
-	offset, ok := analysis.ByteOffset(source, analysisPosition(position))
-	if !ok {
-		t.Fatalf("invalid protocol position %#v", position)
-	}
-	return offset
 }
