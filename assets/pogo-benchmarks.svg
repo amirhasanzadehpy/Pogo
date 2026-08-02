@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">Pogo performance reference profile</title>
+  <desc id="description">P95 interaction latency and release memory gates for the reference profile at commit ca86c19.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#081722"/>
+      <stop offset="1" stop-color="#0d1728"/>
+    </linearGradient>
+    <linearGradient id="fast" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#51dfa2"/>
+      <stop offset="1" stop-color="#45b8f5"/>
+    </linearGradient>
+    <linearGradient id="scale" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8878ff"/>
+      <stop offset="1" stop-color="#cd6ff2"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#020711" flood-opacity="0.38"/>
+    </filter>
+    <style>
+      .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+      .heading { fill: #edf5fb; font-weight: 700; }
+      .copy { fill: #b9cbd7; }
+      .muted { fill: #7891a3; }
+      .grid { stroke: #193441; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" rx="26" fill="url(#background)"/>
+  <circle cx="1510" cy="42" r="190" fill="#122446" opacity="0.64"/>
+  <circle cx="1490" cy="35" r="126" fill="#142c55" opacity="0.44"/>
+
+  <g class="sans">
+    <rect x="70" y="54" width="48" height="48" rx="14" fill="#55dfa4"/>
+    <path d="M85 67h18c10 0 15 6 15 14s-5 14-15 14H85V67zm10 8v12h7c4 0 6-2 6-6s-2-6-6-6h-7z" fill="#073129"/>
+    <text x="138" y="79" class="heading" font-size="28">Performance profile</text>
+    <text x="138" y="102" class="muted" font-size="13" font-weight="700" letter-spacing="1.7">REFERENCE PROFILE / LOWER IS BETTER</text>
+    <text x="1530" y="78" text-anchor="end" class="muted mono" font-size="15">ca86c19 / 2026-07-31</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="136" width="970" height="625" rx="24" fill="#0d2029" stroke="#274553" stroke-width="2"/>
+    <rect x="1070" y="136" width="460" height="625" rx="24" fill="#0d2029" stroke="#274553" stroke-width="2"/>
+  </g>
+
+  <g class="sans">
+    <text x="104" y="184" class="heading" font-size="18">P95 INTERACTION LATENCY</text>
+    <text x="1004" y="184" text-anchor="end" class="muted" font-size="12">microseconds / 200 samples</text>
+
+    <g class="muted" font-size="11" text-anchor="middle">
+      <text x="374" y="222">0</text>
+      <text x="460" y="222">100</text>
+      <text x="546" y="222">200</text>
+      <text x="632" y="222">300</text>
+      <text x="718" y="222">400</text>
+      <text x="804" y="222">500</text>
+      <text x="890" y="222">600</text>
+      <text x="976" y="222">700 us</text>
+    </g>
+    <g class="grid">
+      <line x1="374" y1="235" x2="374" y2="691"/>
+      <line x1="460" y1="235" x2="460" y2="691"/>
+      <line x1="546" y1="235" x2="546" y2="691"/>
+      <line x1="632" y1="235" x2="632" y2="691"/>
+      <line x1="718" y1="235" x2="718" y2="691"/>
+      <line x1="804" y1="235" x2="804" y2="691"/>
+      <line x1="890" y1="235" x2="890" y2="691"/>
+      <line x1="976" y1="235" x2="976" y2="691"/>
+    </g>
+
+    <g class="copy" font-size="15" text-anchor="end">
+      <text x="348" y="275">Hover</text>
+      <text x="348" y="337">10k-model completion</text>
+      <text x="348" y="399">Diagnostics</text>
+      <text x="348" y="461">Definition</text>
+      <text x="348" y="523">Parse + completion</text>
+      <text x="348" y="605">Dense 256 relations</text>
+      <text x="348" y="667">100 invalid expressions</text>
+    </g>
+
+    <g>
+      <rect x="374" y="254" width="10" height="26" rx="7" fill="url(#fast)"/>
+      <rect x="374" y="316" width="10" height="26" rx="7" fill="url(#fast)"/>
+      <rect x="374" y="378" width="14" height="26" rx="7" fill="url(#fast)"/>
+      <rect x="374" y="440" width="24" height="26" rx="7" fill="url(#fast)"/>
+      <rect x="374" y="502" width="50" height="26" rx="7" fill="url(#fast)"/>
+      <rect x="374" y="584" width="427" height="26" rx="7" fill="url(#scale)"/>
+      <rect x="374" y="646" width="561" height="26" rx="7" fill="url(#scale)"/>
+    </g>
+
+    <g class="mono" font-size="14">
+      <text x="396" y="274" fill="#77eab7">3.50 us</text>
+      <text x="396" y="336" fill="#77eab7">4.75 us</text>
+      <text x="400" y="398" fill="#77eab7">15.75 us</text>
+      <text x="410" y="460" fill="#77eab7">28.33 us</text>
+      <text x="437" y="522" fill="#77eab7">58.67 us</text>
+      <text x="814" y="604" fill="#d2a5ff">496.80 us</text>
+      <text x="948" y="666" fill="#d2a5ff">653.00 us</text>
+    </g>
+
+    <rect x="104" y="705" width="902" height="35" rx="10" fill="#10302f" opacity="0.74"/>
+    <circle cx="124" cy="722" r="6" fill="#55dfa4"/>
+    <text x="140" y="727" fill="#8ec9b0" font-size="13" font-weight="700">All plotted interaction workloads complete below 1 ms p95.</text>
+    <text x="986" y="727" text-anchor="end" class="muted" font-size="12">in-process benchmark scope</text>
+  </g>
+
+  <g class="sans">
+    <text x="1104" y="184" class="heading" font-size="18">RELEASE GATES</text>
+    <text x="1496" y="184" text-anchor="end" class="muted" font-size="12">reference profile</text>
+
+    <g>
+      <rect x="1104" y="220" width="392" height="140" rx="20" fill="#112832" stroke="#254653"/>
+      <text x="1130" y="251" class="copy" font-size="14" font-weight="700">Completion p95</text>
+      <text x="1470" y="255" text-anchor="end" fill="#62e7a9" class="mono" font-size="23" font-weight="700">58.67 us</text>
+      <rect x="1130" y="282" width="340" height="12" rx="6" fill="#213d49"/>
+      <rect x="1130" y="282" width="10" height="12" rx="6" fill="#55dfa4"/>
+      <text x="1130" y="325" class="muted" font-size="12">Budget</text>
+      <text x="1470" y="325" text-anchor="end" class="copy mono" font-size="12">10,000 us</text>
+      <text x="1130" y="347" fill="#54b58c" font-size="12">0.59% of budget</text>
+    </g>
+
+    <g>
+      <rect x="1104" y="380" width="392" height="140" rx="20" fill="#112832" stroke="#254653"/>
+      <text x="1130" y="411" class="copy" font-size="14" font-weight="700">Go server RSS</text>
+      <text x="1470" y="415" text-anchor="end" fill="#62e7a9" class="mono" font-size="23" font-weight="700">19.67 MiB</text>
+      <rect x="1130" y="442" width="340" height="12" rx="6" fill="#213d49"/>
+      <rect x="1130" y="442" width="134" height="12" rx="6" fill="url(#fast)"/>
+      <text x="1130" y="485" class="muted" font-size="12">Budget</text>
+      <text x="1470" y="485" text-anchor="end" class="copy mono" font-size="12">50 MiB</text>
+      <text x="1130" y="507" fill="#54b58c" font-size="12">39.3% of budget</text>
+    </g>
+
+    <g>
+      <rect x="1104" y="540" width="392" height="180" rx="20" fill="#112832" stroke="#254653"/>
+      <text x="1130" y="571" class="copy" font-size="14" font-weight="700">Combined idle RSS</text>
+      <text x="1470" y="575" text-anchor="end" fill="#62e7a9" class="mono" font-size="23" font-weight="700">67.55 MiB</text>
+      <rect x="1130" y="602" width="340" height="12" rx="6" fill="#213d49"/>
+      <rect x="1130" y="602" width="153" height="12" rx="6" fill="url(#fast)"/>
+      <text x="1130" y="645" class="muted" font-size="12">Budget</text>
+      <text x="1470" y="645" text-anchor="end" class="copy mono" font-size="12">150 MiB</text>
+      <text x="1130" y="667" fill="#54b58c" font-size="12">45.0% of budget</text>
+      <text x="1130" y="696" class="muted" font-size="12">Go 19.67 + Python worker 47.88 MiB</text>
+    </g>
+  </g>
+
+  <line x1="70" y1="802" x2="1530" y2="802" stroke="#203848"/>
+  <g class="sans" font-size="12">
+    <text x="70" y="834" class="muted">Apple M1 / macOS 26.5.2 / Go 1.22.12 / Python 3.11.10 / Django 5.2.16</text>
+    <text x="1530" y="834" text-anchor="end" class="muted">Memory: max observed idle RSS over 20 samples</text>
+    <text x="70" y="861" fill="#587286">Synthetic in-process timings unless noted; editor transport, startup, and Django schema load are outside hot-path measurements.</text>
+  </g>
+</svg>

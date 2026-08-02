@@ -7,12 +7,17 @@ tests, `README.md`, and `DEV.md` before modifying behavior. Prefer the smallest
 correct change that preserves Pogo's latency, memory, compatibility, security,
 and failure-isolation properties.
 
+Use `MAINTENANCE.md` for operational CI triage, release publication and
+verification, benchmark evidence, rendered documentation, GitHub transport, and
+handoff procedures. `AGENTS.md` remains authoritative when the playbook or an
+older plan conflicts with this contract.
+
 ## Project Mission
 
 Pogo is a Django ORM language server. It provides runtime-accurate completion,
-hover, signature help, diagnostics, definitions, and document links to LSP 3.16
-clients while keeping editor interactions independent of Python startup and
-project import latency.
+hover, signature help, diagnostics, and definitions to LSP 3.16 clients while
+keeping editor interactions independent of Python startup and project import
+latency.
 
 The system has two deliberately separated execution domains:
 
@@ -31,7 +36,7 @@ the only source used while serving editor feature requests.
 ### Hot-Path Isolation
 
 - Python MUST NEVER run synchronously or asynchronously as a consequence of a
-  completion, hover, signature-help, definition, document-link, diagnostic, or
+  completion, hover, signature-help, definition, diagnostic, or
   keystroke/document-change lookup.
 - Hot-path handlers MUST read only current Go document state and the currently
   published in-memory schema generation. They must continue to work when the
@@ -142,6 +147,10 @@ process, or Django objects cross into the schema or analysis layers.
 - LSP positions are UTF-16 code-unit positions. Tree-Sitter and schema source
   ranges use UTF-8 byte coordinates. Convert explicitly at layer boundaries and
   test non-ASCII, malformed positions, and incremental edits.
+- Keep file URIs and native filesystem paths distinct. Construct and parse URIs
+  with `net/url`, convert native paths with `path/filepath`, and test Windows
+  drive letters, UNC paths, `localhost`, spaces, non-ASCII, percent encoding,
+  and `.exe` suffixes. A cross-build does not prove URI or native path behavior.
 - Keep LSP framing and worker framing distinct. Both require bounded reads,
   cancellation/timeout behavior, malformed-input tests, and fuzz coverage.
 - The worker schema is a versioned cross-language API. Any field or semantic
@@ -172,6 +181,10 @@ process, or Django objects cross into the schema or analysis layers.
 - Make ownership and lifetime clear for Tree-Sitter trees, parser-pool values,
   child processes, sockets, files, timers, goroutines, and contexts. Every
   acquisition needs a deterministic release path.
+- Give every subprocess exactly one `Wait` and reap owner. Context cancellation
+  may request termination, but cleanup must not race duplicate `Kill` or `Wait`
+  calls. Normalize platform-specific closed-pipe or process-done errors only
+  when they satisfy the same verified terminal-state contract.
 - Use `sync/atomic` only with a documented immutable-state invariant. Prefer
   typed `atomic.Pointer[T]` over `unsafe.Pointer` and raw
   `atomic.StorePointer`. Never copy atomics after first use.
@@ -267,6 +280,17 @@ process, or Django objects cross into the schema or analysis layers.
 5. Choose the smallest design that satisfies the requirement without moving
    work into the editor hot path.
 
+Treat staged, unstaged, untracked, and ignored files as user-owned unless they
+are explicitly in scope. Never delete, stage, package, or add local editor,
+agent, credential, benchmark, or tool state to ignore rules merely to obtain a
+clean worktree.
+
+When Git or GitHub operations fail, diagnose remote reachability, transport
+authentication, and repository authorization separately before changing
+remotes, credentials, repository visibility, tags, or access settings. Prefer
+temporary command-scoped transport overrides to persistent user configuration;
+make a persistent change only when the user requests it and its scope is clear.
+
 ### While Editing
 
 - Keep changes scoped. Do not perform unrelated renames, formatting sweeps,
@@ -279,6 +303,11 @@ process, or Django objects cross into the schema or analysis layers.
   development, architecture, benchmark, protocol, or release-workflow changes.
 - Never edit benchmark reference values without a real warmed run and recorded
   environment/commit metadata.
+- Documentation claims include images, charts, diagrams, badges, captions, and
+  alt text. Feature or benchmark changes must update every affected rendered
+  asset and capability list. Published measurements must identify one tracked
+  source revision and retained machine-readable evidence; never combine values
+  from different runs or an undocumented working tree.
 
 ### Verification By Change Type
 
@@ -293,7 +322,9 @@ process, or Django objects cross into the schema or analysis layers.
 | Hot path, graph layout, parser state, or persistent memory | Before/after focused benchmark with `-benchmem`, then `make bench` |
 | Unix/Windows endpoint or process handling | Platform-specific tests plus native transport CI expectations; cross-compilation alone is insufficient |
 | VS Code extension | `npm ci --include=dev` and `npm run compile` in `client/vscode`; package when release behavior changes |
-| Release/build graph or embedded worker imports | `make build` and `make release-check` |
+| Release build graph or embedded worker imports | `make build` and `make release-check` |
+| Release workflow, packaging, tag, or distribution | Validate version synchronization and tag ancestry, complete every required CI job, then verify the published manifest, checksums, archive contents, VSIX version, and runnable native binary |
+| Documentation, badges, diagrams, or benchmark charts | Markdown/link validation, rendered-asset inspection, claim-to-source review, and exact release/profile evidence where shown |
 
 ## Build And Verification Commands
 
@@ -399,6 +430,10 @@ when manually running the server.
 - Go tests should be deterministic, race-safe, and table-driven when cases share
   a contract. Avoid sleeps as synchronization; use channels, contexts, hooks, or
   bounded polling when testing real subprocess state.
+- Triage CI from the exact workflow, matrix cell, failed step, and first
+  actionable log before changing code or rerunning a job. A passing rerun alone
+  does not prove infrastructure noise: reproduce or stress the focused test and
+  retain native-platform evidence for process, endpoint, URI, and path failures.
 - Schema/cache tests must prove readers see one complete generation, never a
   mixture. Include concurrent reads and swaps for publication changes.
 - Worker tests must verify deterministic JSON, schema bounds, graceful errors,
@@ -487,5 +522,8 @@ A change is complete only when:
 - The last valid schema survives every newly introduced failure path.
 - User-facing and developer-facing documentation is updated where behavior,
   configuration, architecture, support, or workflows changed.
+- Tagged releases are complete only after the remote release and exact asset
+  manifest are verified; a green build without published, downloadable,
+  checksum-valid artifacts is not a completed release.
 - No unrelated changes, secrets, local environments, build outputs, benchmark
   artifacts, or temporary runtime files are included.
