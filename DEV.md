@@ -75,7 +75,7 @@ Run the language server with the authenticated schema worker enabled:
 build/pogo \
   -project testdata/sample_django_project \
   -settings sample_project.settings \
-  -python .venv-fixture/bin/python \
+  -python "$PWD/.venv-fixture/bin/python" \
   -log-file build/protocol.log
 ```
 

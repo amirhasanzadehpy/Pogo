@@ -410,7 +410,7 @@ build/testclient \
   build/pogo \
   -project testdata/sample_django_project \
   -settings sample_project.settings \
-  -python .venv-fixture/bin/python
+  -python "$PWD/.venv-fixture/bin/python"
 ```
 
 ```sh
