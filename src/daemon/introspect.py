@@ -1018,8 +1018,8 @@ def serve_connection(connection, project, settings_name, worker_state=None):
 
 
 def connect_worker(project, settings_name):
-    network = os.environ.get(WORKER_NETWORK_ENV)
-    address = os.environ.get(WORKER_ADDRESS_ENV)
+    network = os.environ.pop(WORKER_NETWORK_ENV, None)
+    address = os.environ.pop(WORKER_ADDRESS_ENV, None)
     token = os.environ.pop(WORKER_TOKEN_ENV, None)
     token_file = os.environ.pop(WORKER_TOKEN_FILE_ENV, None)
     if token_file:

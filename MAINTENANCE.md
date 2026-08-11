@@ -204,8 +204,8 @@ inspected and absence is established. Then verify:
 1. The working tree contains no unintended staged or tracked changes.
 2. `internal/lsp.ServerVersion` is `X.Y.Z`.
 3. `client/vscode/package.json` and the root entries in
-   `client/vscode/package-lock.json` are `X.Y.Z`. Lockfile synchronization is a
-   manual preflight requirement until the workflow checks it explicitly.
+   `client/vscode/package-lock.json` are `X.Y.Z`; the workflow checks all three
+   package-version fields.
 4. User-facing installation text names the intended version and assets.
 5. The release commit is pushed to `main` and is an ancestor of `origin/main`.
 6. `make build`, `make test`, `make test-race`, `make bench`, and
@@ -235,7 +235,9 @@ transport, cross-build, and performance jobs. It must:
 - Cross-build with `CGO_ENABLED=0` and the required grammar tags.
 - Inspect every built release binary with `scripts/check_release.py`.
 - Execute the Linux binary and verify its reported version.
-- Package the VS Code extension.
+- Package the VS Code extension with the same six staged native binaries.
+- Inspect the VSIX for target completeness, executable modes, version agreement,
+  and byte identity with the standalone binaries.
 - Generate checksums after temporary staging directories are removed.
 - Publish only after every prior step succeeds.
 
@@ -266,8 +268,9 @@ gh release download vX.Y.Z --repo amirhasanzadehpy/Pogo \
 ```
 
 Verify the exact filenames and count, SHA-256 checksums, one-file archive
-layout, executable name, VSIX version, and `pogo -version` from outside the
-source checkout. Also confirm the repository visibility did not change.
+layout, executable name, all six VSIX binaries, VSIX version, and `pogo -version`
+from outside the source checkout. Also confirm the repository visibility did
+not change.
 
 A successful build with an empty GitHub Releases page is not a release. A
 release record without downloadable, checksum-valid consumer artifacts is also

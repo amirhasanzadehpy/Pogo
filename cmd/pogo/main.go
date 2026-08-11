@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -39,6 +38,7 @@ func run(args []string, stderr io.Writer) int {
 	projectRoot := flags.String("project", "", "Django project root")
 	pythonPath := flags.String("python", "", "Python interpreter for the Django worker")
 	settingsModule := flags.String("settings", "", "Django settings module")
+	workerEnvironmentFile := flags.String("worker-env-file", "", "environment file for the Django worker")
 	showVersion := flags.Bool("version", false, "print the server version and exit")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -70,7 +70,7 @@ func run(args []string, stderr io.Writer) int {
 	defer features.Close()
 	workerLogger := commonlog.GetLogger("django-worker")
 	factory := func(params *protocol.InitializeParams) (lsp.Worker, error) {
-		config, enabled, err := resolveWorkerConfig(*projectRoot, *pythonPath, *settingsModule, params)
+		config, enabled, err := resolveWorkerConfig(*projectRoot, *pythonPath, *settingsModule, *workerEnvironmentFile, params)
 		if err != nil || !enabled {
 			return nil, err
 		}
@@ -81,13 +81,15 @@ func run(args []string, stderr io.Writer) int {
 
 type initializationOptions struct {
 	DjangoORM struct {
-		ProjectRoot    string `json:"projectRoot"`
-		PythonPath     string `json:"pythonPath"`
-		SettingsModule string `json:"settingsModule"`
+		ProjectRoot     string             `json:"projectRoot"`
+		PythonPath      string             `json:"pythonPath"`
+		SettingsModule  string             `json:"settingsModule"`
+		EnvironmentFile string             `json:"environmentFile"`
+		Environment     map[string]*string `json:"environment"`
 	} `json:"djangoOrm"`
 }
 
-func resolveWorkerConfig(cliProject, cliPython, cliSettings string, params *protocol.InitializeParams) (pythonworker.Config, bool, error) {
+func resolveWorkerConfig(cliProject, cliPython, cliSettings, cliEnvironmentFile string, params *protocol.InitializeParams) (pythonworker.Config, bool, error) {
 	var options initializationOptions
 	if params != nil && params.InitializationOptions != nil {
 		payload, err := json.Marshal(params.InitializationOptions)
@@ -121,29 +123,32 @@ func resolveWorkerConfig(cliProject, cliPython, cliSettings string, params *prot
 	}
 
 	pythonPath := firstNonempty(cliPython, options.DjangoORM.PythonPath)
-	if pythonPath == "" {
-		if virtualEnvironment := os.Getenv("VIRTUAL_ENV"); virtualEnvironment != "" {
-			pythonPath = virtualEnvironmentPython(virtualEnvironment)
-		} else {
-			candidate := virtualEnvironmentPython(filepath.Join(projectRoot, ".venv"))
-			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-				pythonPath = candidate
-			}
+	if pythonPath != "" {
+		pythonPath = projectPath(projectRoot, pythonPath)
+	} else {
+		candidate := virtualEnvironmentPython(filepath.Join(projectRoot, ".venv"))
+		info, statErr := os.Stat(candidate)
+		switch {
+		case statErr == nil && info.Mode().IsRegular():
+			pythonPath = candidate
+		case statErr == nil:
+			return pythonworker.Config{}, false, fmt.Errorf("project Python interpreter %q is not a regular file; set -python or djangoOrm.pythonPath", candidate)
+		case !errors.Is(statErr, os.ErrNotExist):
+			return pythonworker.Config{}, false, fmt.Errorf("inspect project Python interpreter %q: %w", candidate, statErr)
+		default:
+			return pythonworker.Config{}, false, fmt.Errorf("no Python interpreter configured; set -python or djangoOrm.pythonPath, or create %q", candidate)
 		}
 	}
-	if pythonPath == "" {
-		resolved, lookupErr := exec.LookPath("python3")
-		if lookupErr != nil {
-			pythonPath = "python3"
-		} else {
-			pythonPath = resolved
-		}
+	environmentFile := firstNonempty(cliEnvironmentFile, options.DjangoORM.EnvironmentFile)
+	if environmentFile != "" {
+		environmentFile = projectPath(projectRoot, environmentFile)
 	}
-	settings := firstNonempty(cliSettings, options.DjangoORM.SettingsModule, os.Getenv("DJANGO_SETTINGS_MODULE"))
 	return pythonworker.Config{
-		ProjectRoot:    projectRoot,
-		PythonPath:     pythonPath,
-		SettingsModule: settings,
+		ProjectRoot:     projectRoot,
+		PythonPath:      pythonPath,
+		SettingsModule:  firstNonempty(cliSettings, options.DjangoORM.SettingsModule),
+		EnvironmentFile: environmentFile,
+		Environment:     options.DjangoORM.Environment,
 	}, true, nil
 }
 
@@ -161,6 +166,13 @@ func virtualEnvironmentPython(root string) string {
 		return filepath.Join(root, "Scripts", "python.exe")
 	}
 	return filepath.Join(root, "bin", "python")
+}
+
+func projectPath(projectRoot, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(projectRoot, path)
 }
 
 func uriPath(value string) string {

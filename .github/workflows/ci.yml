@@ -80,8 +80,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/pogo ./cmd/testclient
-      - run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags=grammar_subset,grammar_subset_python ./cmd/pogo ./cmd/testclient
+      - name: Cross-build supported extension hosts
+        shell: bash
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" \
+              go build -tags=grammar_subset,grammar_subset_python ./cmd/pogo
+          done
       - run: make release-check
 
   performance-gates:
@@ -133,8 +138,10 @@ jobs:
           fi
           version="${GITHUB_REF_NAME#v}"
           extension_version="$(node -p "require('./client/vscode/package.json').version")"
-          if [[ "$extension_version" != "$version" ]]; then
-            echo "VS Code extension version $extension_version does not match tag $GITHUB_REF_NAME" >&2
+          lock_version="$(node -p "require('./client/vscode/package-lock.json').version")"
+          lock_root_version="$(node -p "require('./client/vscode/package-lock.json').packages[''].version")"
+          if [[ "$extension_version" != "$version" || "$lock_version" != "$version" || "$lock_root_version" != "$version" ]]; then
+            echo "VS Code extension versions ($extension_version, $lock_version, $lock_root_version) do not match tag $GITHUB_REF_NAME" >&2
             exit 1
           fi
           git fetch origin main
@@ -175,7 +182,10 @@ jobs:
         working-directory: client/vscode
         run: |
           npm ci --include=dev
-          npm run package -- --out "../../dist/pogo-${GITHUB_REF_NAME#v}.vsix"
+          node scripts/bundle.js --source=../../dist/stage
+          npm run package:prepared -- --out "../../dist/pogo-${GITHUB_REF_NAME#v}.vsix"
+      - name: Inspect VS Code extension
+        run: python3 scripts/check_release.py --vsix "dist/pogo-${GITHUB_REF_NAME#v}.vsix" dist/stage/*/pogo*
       - name: Generate checksums
         shell: bash
         run: |

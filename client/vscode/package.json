@@ -2,7 +2,7 @@
   "name": "pogo",
   "displayName": "Pogo",
   "description": "Django ORM language support powered by the Pogo language server.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "amirhasanzadehpy",
   "private": true,
   "type": "commonjs",
@@ -43,25 +43,25 @@
           "type": "string",
           "default": "",
           "scope": "resource",
-          "markdownDescription": "Path to the `pogo` executable. Relative paths are resolved against the workspace folder. Leave empty to search the extension host's `PATH`."
+          "markdownDescription": "Optional path to a custom `pogo` executable. Relative paths are resolved against the workspace folder. Leave empty to use the executable bundled with the extension."
         },
         "pogo.pythonPath": {
           "type": "string",
           "default": "",
           "scope": "resource",
-          "markdownDescription": "Python interpreter used to start Django. Relative paths are resolved against the workspace folder. Leave empty to use Pogo's environment discovery."
+          "markdownDescription": "Python interpreter used to start Django. Relative paths are resolved against the workspace folder. Leave empty to use VS Code's active Python environment, then the workspace `.venv`; Pogo does not use ambient `VIRTUAL_ENV` or search the worker's `PATH` for a global Python."
         },
         "pogo.settingsModule": {
           "type": "string",
           "default": "",
           "scope": "resource",
-          "markdownDescription": "Django settings module, such as `config.settings`. Leave empty to use Pogo's environment and project discovery."
+          "markdownDescription": "Django settings module, such as `config.settings`. Leave empty to use an explicitly configured worker `DJANGO_SETTINGS_MODULE`, the literal setting in `manage.py`, or one unambiguous immediate `*/settings.py`. Pogo does not inherit an ambient settings module."
         },
         "pogo.envFile": {
           "type": "string",
           "default": "",
           "scope": "resource",
-          "markdownDescription": "Dotenv file loaded into the Pogo server and Django worker environment. Relative paths are resolved against the workspace folder. Values override the extension host environment."
+          "markdownDescription": "Explicit worker environment file. Relative paths are resolved against the workspace folder and the absolute path is sent to Pogo; the extension does not read the file. No file is discovered automatically. Values are loaded over a baseline containing only the coordinator's `PATH` and snapshotted until Pogo restarts. Prefer an ignored, permission-restricted `.env.pogo` for secrets and track a value-free `.env.pogo.example`; Pogo warns when the target is group/world-readable on POSIX."
         },
         "pogo.environment": {
           "type": "object",
@@ -73,20 +73,21 @@
               "null"
             ]
           },
-          "markdownDescription": "Environment overrides for the Pogo server and Django worker. String values override inherited and dotenv values; `null` removes an inherited variable. Do not store secrets in settings; use a protected `pogo.envFile`."
+          "markdownDescription": "Nonsecret Django worker environment literals. File values are applied first; strings replace them and `null` removes them. The coordinator's `PATH` is inherited for ordinary subprocess tools; other editor/coordinator variables are not inherited. Literal values cross LSP initialization and can appear in LSP traces, so keep secrets in a protected `pogo.envFile`."
         }
       }
     }
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('out', { recursive: true, force: true })\"",
+    "bundle": "node scripts/bundle.js",
     "compile": "tsc --noEmit -p . && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --watch",
     "vscode:prepublish": "npm run clean && npm run compile",
-    "package": "vsce package --skip-license"
+    "package": "npm run bundle && vsce package --skip-license",
+    "package:prepared": "vsce package --skip-license"
   },
   "dependencies": {
-    "dotenv": "17.4.2",
     "vscode-languageclient": "10.1.0"
   },
   "devDependencies": {

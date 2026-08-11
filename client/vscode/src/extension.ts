@@ -1,7 +1,6 @@
 import { constants } from 'node:fs';
-import { access, readFile, stat } from 'node:fs/promises';
+import { access, stat } from 'node:fs/promises';
 import * as path from 'node:path';
-import { parse as parseDotenv } from 'dotenv';
 import * as vscode from 'vscode';
 import {
   LanguageClient,
@@ -11,9 +10,6 @@ import {
 
 const executableName = 'pogo';
 const executableSetting = 'pogo.executablePath';
-const releasesURL = vscode.Uri.parse(
-  'https://github.com/amirhasanzadehpy/Pogo/releases',
-);
 const standaloneKey = 'standalone';
 
 interface ClientTarget {
@@ -21,12 +17,20 @@ interface ClientTarget {
   readonly folder?: vscode.WorkspaceFolder;
 }
 
+interface PythonExtensionApi {
+  readonly environments?: {
+    getActiveEnvironmentPath(resource?: vscode.Uri): { readonly path: string } | undefined;
+  };
+}
+
 const clients = new Map<string, LanguageClient>();
 let lifecycle = Promise.resolve();
 let shuttingDown = false;
 let notificationVisible = false;
+let extensionUri: vscode.Uri;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	extensionUri = context.extensionUri;
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('pogo')) {
@@ -203,13 +207,21 @@ async function createClient(
     'pogo',
     target.folder?.uri,
   );
-  const pythonPath = resolveWorkspacePath(
+  const pythonPath = await resolvePythonPath(
     configuration.get<string>('pythonPath', '').trim(),
     target.folder,
   );
   const settingsModule = configuration
     .get<string>('settingsModule', '')
     .trim();
+  const environmentFile = resolveWorkspacePath(
+    configuration.get<string>('envFile', '').trim(),
+    target.folder,
+  );
+  const environment = configuration.get<Record<string, string | null>>(
+    'environment',
+    {},
+  );
   const djangoOrm =
     target.folder === undefined
       ? undefined
@@ -217,18 +229,15 @@ async function createClient(
           projectRoot: target.folder.uri.fsPath,
           ...(pythonPath === '' ? {} : { pythonPath }),
           ...(settingsModule === '' ? {} : { settingsModule }),
+          ...(environmentFile === '' ? {} : { environmentFile }),
+          environment,
         };
-  const environment = await resolveServerEnvironment(
-    configuration,
-    target.folder,
-  );
   const serverOptions: ServerOptions = {
     command: executable,
     options: {
       ...(target.folder === undefined
         ? {}
         : { cwd: target.folder.uri.fsPath }),
-      env: environment,
     },
   };
   const clientOptions: LanguageClientOptions = {
@@ -306,61 +315,6 @@ async function createClient(
   );
 }
 
-async function resolveServerEnvironment(
-  configuration: vscode.WorkspaceConfiguration,
-  folder: vscode.WorkspaceFolder | undefined,
-): Promise<NodeJS.ProcessEnv> {
-  const environment = { ...process.env };
-  const configuredEnvFile = configuration.get<string>('envFile', '').trim();
-  if (configuredEnvFile !== '') {
-    if (!path.isAbsolute(configuredEnvFile) && folder === undefined) {
-      throw new Error('a relative pogo.envFile requires a workspace folder');
-    }
-    const envFile = path.isAbsolute(configuredEnvFile)
-      ? path.normalize(configuredEnvFile)
-      : path.resolve(folder!.uri.fsPath, configuredEnvFile);
-    let contents: string;
-    try {
-      contents = await readFile(envFile, 'utf8');
-    } catch (error: unknown) {
-      throw new Error(
-        `could not read pogo.envFile '${envFile}': ${errorMessage(error)}`,
-      );
-    }
-    for (const [key, value] of Object.entries(parseDotenv(contents))) {
-      setEnvironmentValue(environment, key, value);
-    }
-  }
-
-  const overrides = configuration.get<Record<string, string | null>>(
-    'environment',
-    {},
-  );
-  for (const [key, value] of Object.entries(overrides)) {
-    setEnvironmentValue(environment, key, value);
-  }
-  return environment;
-}
-
-function setEnvironmentValue(
-  environment: NodeJS.ProcessEnv,
-  key: string,
-  value: string | null,
-): void {
-  const existingKey =
-    process.platform === 'win32'
-      ? Object.keys(environment).find(
-          (candidate) => candidate.toUpperCase() === key.toUpperCase(),
-        )
-      : key;
-  if (existingKey !== undefined) {
-    delete environment[existingKey];
-  }
-  if (value !== null) {
-    environment[key] = value;
-  }
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -383,6 +337,26 @@ function resolveWorkspacePath(
   return path.resolve(folder.uri.fsPath, configured);
 }
 
+async function resolvePythonPath(
+  configured: string,
+  folder: vscode.WorkspaceFolder | undefined,
+): Promise<string> {
+  if (configured !== '') {
+    return resolveWorkspacePath(configured, folder);
+  }
+  const extension = vscode.extensions.getExtension<PythonExtensionApi>('ms-python.python');
+  if (extension === undefined) {
+    return '';
+  }
+  try {
+    const api = extension.isActive ? extension.exports : await extension.activate();
+    return api.environments?.getActiveEnvironmentPath(folder?.uri)?.path ?? '';
+  } catch (error: unknown) {
+    console.warn('Pogo could not read the active Python environment:', error);
+    return '';
+  }
+}
+
 async function resolveExecutable(
   folder: vscode.WorkspaceFolder | undefined,
 ): Promise<string | undefined> {
@@ -399,44 +373,35 @@ async function resolveExecutable(
       : path.resolve(folder!.uri.fsPath, configured);
     return (await isExecutableFile(candidate)) ? candidate : undefined;
   }
-  return findExecutableOnPath(folder?.uri.fsPath ?? process.cwd());
+  const candidate = bundledExecutablePath();
+  return candidate !== undefined && (await isExecutableFile(candidate))
+    ? candidate
+    : undefined;
 }
 
-async function findExecutableOnPath(
-  workingDirectory: string,
-): Promise<string | undefined> {
-  const pathValue = environmentValue('PATH');
-  if (pathValue === undefined) {
+function bundledExecutablePath(): string | undefined {
+  const platform =
+    process.platform === 'win32'
+      ? 'windows'
+      : process.platform === 'darwin' || process.platform === 'linux'
+        ? process.platform
+        : undefined;
+  const architecture =
+    process.arch === 'x64'
+      ? 'amd64'
+      : process.arch === 'arm64'
+        ? 'arm64'
+        : undefined;
+  if (platform === undefined || architecture === undefined) {
     return undefined;
   }
-  const names =
-    process.platform === 'win32'
-      ? [`${executableName}.exe`, `${executableName}.com`, executableName]
-      : [executableName];
-  const seen = new Set<string>();
-
-  for (const rawEntry of pathValue.split(path.delimiter)) {
-    const entry = unquotePathEntry(rawEntry);
-    const directory =
-      entry === ''
-        ? workingDirectory
-        : path.isAbsolute(entry)
-          ? entry
-          : path.resolve(workingDirectory, entry);
-    for (const name of names) {
-      const candidate = path.join(directory, name);
-      const comparisonKey =
-        process.platform === 'win32' ? candidate.toLowerCase() : candidate;
-      if (seen.has(comparisonKey)) {
-        continue;
-      }
-      seen.add(comparisonKey);
-      if (await isExecutableFile(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return undefined;
+  const name = platform === 'windows' ? `${executableName}.exe` : executableName;
+  return vscode.Uri.joinPath(
+    extensionUri,
+    'bin',
+    `${platform}-${architecture}`,
+    name,
+  ).fsPath;
 }
 
 async function isExecutableFile(candidate: string): Promise<boolean> {
@@ -454,46 +419,30 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
   }
 }
 
-function environmentValue(name: string): string | undefined {
-  if (process.platform !== 'win32') {
-    return process.env[name];
-  }
-  const key = Object.keys(process.env).find(
-    (candidate) => candidate.toUpperCase() === name.toUpperCase(),
-  );
-  return key === undefined ? undefined : process.env[key];
-}
-
-function unquotePathEntry(value: string): string {
-  const trimmed = value.trim();
-  if (
-    trimmed.length >= 2 &&
-    trimmed.startsWith('"') &&
-    trimmed.endsWith('"')
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
 function notifyMissingExecutable(folder: vscode.WorkspaceFolder | undefined): void {
   if (notificationVisible) {
     return;
   }
   notificationVisible = true;
   const location = folder === undefined ? 'this window' : folder.name;
+  const configured = vscode.workspace
+    .getConfiguration('pogo', folder?.uri)
+    .get<string>('executablePath', '')
+    .trim();
+  const detail =
+    configured !== ''
+      ? `The configured '${executableSetting}' is not executable.`
+      : bundledExecutablePath() === undefined
+        ? `This extension does not include Pogo for ${process.platform}/${process.arch}.`
+        : 'The Pogo executable bundled with this extension is missing or not executable.';
   void vscode.window
     .showErrorMessage(
-      `Pogo could not find '${executableName}' for ${location}. ` +
-        `Download the binary and add it to PATH, or set '${executableSetting}'.`,
-      'Download Pogo',
+      `Pogo could not start for ${location}. ${detail}`,
       'Open Settings',
     )
     .then(async (selection) => {
       notificationVisible = false;
-      if (selection === 'Download Pogo') {
-        await vscode.env.openExternal(releasesURL);
-      } else if (selection === 'Open Settings') {
+      if (selection === 'Open Settings') {
         await vscode.commands.executeCommand(
           'workbench.action.openSettings',
           executableSetting,

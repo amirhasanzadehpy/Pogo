@@ -49,6 +49,7 @@ test-race:
 
 fuzz:
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzIPCReadFrame$$' -fuzztime=30s ./internal/python
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzParseWorkerEnvironment$$' -fuzztime=30s ./internal/python
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzLSPReadFrame$$' -fuzztime=30s ./internal/harness
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzUTF16PositionRoundTrip$$' -fuzztime=30s ./internal/analysis
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzUTF16EditMatchesFullParse$$' -fuzztime=30s ./internal/analysis

@@ -36,6 +36,8 @@ type Config struct {
 	ProjectRoot     string
 	PythonPath      string
 	SettingsModule  string
+	EnvironmentFile string
+	Environment     map[string]*string
 	ConnectTimeout  time.Duration
 	RequestTimeout  time.Duration
 	ShutdownTimeout time.Duration
@@ -49,24 +51,27 @@ type Manager struct {
 	cache  *schema.Cache
 	log    Logger
 
-	mu               sync.Mutex
-	cancel           context.CancelFunc
-	done             chan struct{}
-	lastErr          error
-	activeRuntimeDir string
-	run              func(context.Context, func(uint64, int)) (bool, error)
-	workerScript     []byte
-	requestCount     atomic.Uint64
-	sessionCancel    context.CancelFunc
-	refreshTimer     *time.Timer
-	refreshWake      chan struct{}
-	refreshEpoch     uint64
-	releasedEpoch    uint64
-	activeEpoch      uint64
-	refreshPending   bool
-	refreshDeadline  time.Time
-	refreshDelay     time.Duration
-	refreshStarted   time.Time
+	mu                  sync.Mutex
+	cancel              context.CancelFunc
+	done                chan struct{}
+	lastErr             error
+	activeRuntimeDir    string
+	run                 func(context.Context, func(uint64, int)) (bool, error)
+	workerScript        []byte
+	workerEnvironment   []workerEnvironmentEntry
+	platformEnvironment []workerEnvironmentEntry
+	coordinatorPath     string
+	requestCount        atomic.Uint64
+	sessionCancel       context.CancelFunc
+	refreshTimer        *time.Timer
+	refreshWake         chan struct{}
+	refreshEpoch        uint64
+	releasedEpoch       uint64
+	activeEpoch         uint64
+	refreshPending      bool
+	refreshDeadline     time.Time
+	refreshDelay        time.Duration
+	refreshStarted      time.Time
 }
 
 const schemaRefreshDebounce = 300 * time.Millisecond
@@ -91,13 +96,67 @@ func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, er
 	}
 	pythonPath := config.PythonPath
 	if pythonPath == "" {
-		pythonPath = "python3"
+		return nil, errors.New("Python executable is required; configure an explicit interpreter or project .venv")
 	}
-	if strings.ContainsRune(pythonPath, filepath.Separator) && !filepath.IsAbs(pythonPath) {
-		pythonPath, err = filepath.Abs(pythonPath)
-		if err != nil {
-			return nil, fmt.Errorf("resolve Python executable: %w", err)
+	if !filepath.IsAbs(pythonPath) {
+		pythonPath = filepath.Join(projectRoot, pythonPath)
+	}
+	pythonPath, err = filepath.Abs(pythonPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Python executable: %w", err)
+	}
+	pythonPath = filepath.Clean(pythonPath)
+	pythonInfo, err := os.Stat(pythonPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect Python executable %q: %w", pythonPath, err)
+	}
+	if !pythonInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("Python executable %q is not a regular file", pythonPath)
+	}
+	if err := validatePythonExecutable(pythonPath, pythonInfo); err != nil {
+		return nil, fmt.Errorf("Python executable %q %w", pythonPath, err)
+	}
+	environmentFile, err := resolveWorkerEnvironmentFile(projectRoot, config.EnvironmentFile)
+	if err != nil {
+		return nil, err
+	}
+	config.EnvironmentFile = environmentFile
+	environment := make(map[string]*string, len(config.Environment))
+	for name, configuredValue := range config.Environment {
+		if configuredValue == nil {
+			environment[name] = nil
+			continue
 		}
+		value := *configuredValue
+		environment[name] = &value
+	}
+	config.Environment = environment
+	workerEnvironment, err := loadWorkerEnvironment(config, logger)
+	if err != nil {
+		return nil, err
+	}
+	if environmentSettings, present := workerEnvironmentValue(workerEnvironment, "DJANGO_SETTINGS_MODULE"); present {
+		if config.SettingsModule != "" && config.SettingsModule != environmentSettings {
+			return nil, errors.New("settings module conflict between explicit settingsModule and worker environment DJANGO_SETTINGS_MODULE")
+		}
+	}
+	platformEnvironment, err := platformWorkerEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	probe := &Manager{
+		config:              Config{PythonPath: pythonPath},
+		workerEnvironment:   workerEnvironment,
+		platformEnvironment: platformEnvironment,
+		coordinatorPath:     os.Getenv("PATH"),
+	}
+	runtimeProbe := filepath.Join(os.TempDir(), "pogo-worker-000000000")
+	addressProbe := filepath.Join(runtimeProbe, "worker.sock")
+	if runtime.GOOS == "windows" {
+		addressProbe = "127.0.0.1:65535"
+	}
+	if _, err := probe.buildWorkerEnvironment(filepath.Join(runtimeProbe, "tmp"), "unix", addressProbe, filepath.Join(runtimeProbe, "token")); err != nil {
+		return nil, fmt.Errorf("validate worker environment configuration: %w", err)
 	}
 	if config.ConnectTimeout <= 0 {
 		config.ConnectTimeout = 5 * time.Second
@@ -119,7 +178,13 @@ func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, er
 	}
 	config.ProjectRoot = projectRoot
 	config.PythonPath = pythonPath
-	manager := &Manager{config: config, cache: cache, log: logger}
+	config.Environment = nil
+	manager := &Manager{
+		config: config, cache: cache, log: logger,
+		workerEnvironment:   workerEnvironment,
+		platformEnvironment: platformEnvironment,
+		coordinatorPath:     probe.coordinatorPath,
+	}
 	manager.workerScript = workerdaemon.IntrospectPython
 	manager.run = manager.runSession
 	return manager, nil
@@ -467,6 +532,10 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 			runErr = errors.Join(runErr, fmt.Errorf("%w: remove worker runtime: %v", errWorkerCleanup, err))
 		}
 	}()
+	tempDirectory := filepath.Join(runtimeDirectory, "tmp")
+	if err := os.Mkdir(tempDirectory, 0o700); err != nil {
+		return false, fmt.Errorf("create worker temporary directory: %w", err)
+	}
 
 	scriptPath := filepath.Join(runtimeDirectory, "introspect.py")
 	if err := os.WriteFile(scriptPath, manager.workerScript, 0o600); err != nil {
@@ -497,12 +566,11 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	}
 	command := exec.Command(manager.config.PythonPath, arguments...)
 	configureProcess(command)
-	command.Env = append(cleanWorkerEnvironment(os.Environ()),
-		"PYTHONDONTWRITEBYTECODE=1",
-		"POGO_WORKER_NETWORK="+endpoint.Network(),
-		"POGO_WORKER_ADDRESS="+endpoint.Address(),
-		"POGO_WORKER_TOKEN_FILE="+tokenPath,
-	)
+	command.Dir = manager.config.ProjectRoot
+	command.Env, err = manager.buildWorkerEnvironment(tempDirectory, endpoint.Network(), endpoint.Address(), tokenPath)
+	if err != nil {
+		return false, err
+	}
 	output := &workerOutput{log: manager.log}
 	command.Stdout = output
 	command.Stderr = output
@@ -694,14 +762,45 @@ func (output *workerOutput) Write(payload []byte) (int, error) {
 
 var _ io.Writer = (*workerOutput)(nil)
 
-func cleanWorkerEnvironment(environment []string) []string {
-	cleaned := make([]string, 0, len(environment))
-	for _, entry := range environment {
-		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(strings.ToUpper(name), "POGO_WORKER_") {
-			continue
+func (manager *Manager) buildWorkerEnvironment(tempDirectory, network, address, tokenPath string) ([]string, error) {
+	entries := make([]workerEnvironmentEntry, 0, len(manager.workerEnvironment)+len(manager.platformEnvironment)+10)
+	entries = append(entries, manager.workerEnvironment...)
+	if _, present := workerEnvironmentValue(entries, "PATH"); !present {
+		pathValue := filepath.Dir(manager.config.PythonPath)
+		if manager.coordinatorPath != "" {
+			pathValue += string(os.PathListSeparator) + manager.coordinatorPath
 		}
-		cleaned = append(cleaned, entry)
+		entries = append(entries, workerEnvironmentEntry{name: "PATH", value: pathValue})
 	}
-	return cleaned
+	entries = append(entries,
+		workerEnvironmentEntry{name: "PYTHONDONTWRITEBYTECODE", value: "1"},
+		workerEnvironmentEntry{name: "PYTHONUNBUFFERED", value: "1"},
+		workerEnvironmentEntry{name: "PYTHONUTF8", value: "1"},
+		workerEnvironmentEntry{name: "TMPDIR", value: tempDirectory},
+		workerEnvironmentEntry{name: "TMP", value: tempDirectory},
+		workerEnvironmentEntry{name: "TEMP", value: tempDirectory},
+		workerEnvironmentEntry{name: "POGO_WORKER_NETWORK", value: network},
+		workerEnvironmentEntry{name: "POGO_WORKER_ADDRESS", value: address},
+		workerEnvironmentEntry{name: "POGO_WORKER_TOKEN_FILE", value: tokenPath},
+	)
+	entries = append(entries, manager.platformEnvironment...)
+	if err := validateWorkerProcessEnvironment(entries); err != nil {
+		return nil, fmt.Errorf("build worker process environment: %w", err)
+	}
+	sortWorkerEnvironment(entries)
+	environment := make([]string, len(entries))
+	for index, entry := range entries {
+		environment[index] = entry.name + "=" + entry.value
+	}
+	return environment, nil
+}
+
+func workerEnvironmentValue(entries []workerEnvironmentEntry, name string) (string, bool) {
+	normalized := normalizeEnvironmentKey(name)
+	for _, entry := range entries {
+		if normalizeEnvironmentKey(entry.name) == normalized {
+			return entry.value, true
+		}
+	}
+	return "", false
 }

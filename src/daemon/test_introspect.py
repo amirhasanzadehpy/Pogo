@@ -586,11 +586,28 @@ class IntrospectionTests(unittest.TestCase):
         self.assertLess(len(payload), introspect.MAX_IPC_FRAME_SIZE)
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix sockets are unavailable")
-    def test_authenticated_worker_subprocess_loads_schema_and_shuts_down(self):
+    def test_authenticated_worker_subprocess_hides_endpoint_environment(self):
         with tempfile.TemporaryDirectory(prefix="pogo-python-worker-") as temporary:
-            socket_path = str(Path(temporary) / "worker.sock")
-            token = "test-token-not-for-logs"
-            token_path = Path(temporary) / "token"
+            project = Path(temporary).resolve()
+            (project / "settings.py").write_text(
+                """import os
+
+worker_variables = sorted(name for name in os.environ if name.startswith("POGO_WORKER_"))
+if worker_variables:
+    raise RuntimeError(f"worker endpoint environment leaked: {', '.join(worker_variables)}")
+
+print("settings startup output")
+SECRET_KEY = "fixture"
+INSTALLED_APPS = []
+DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+""",
+                encoding="utf-8",
+            )
+            socket_path = str(project / "worker.sock")
+            token = "file-token-not-for-logs"
+            direct_token = "direct-token-not-for-logs"
+            token_path = project / "token"
             token_path.write_text(token, encoding="ascii")
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             listener.bind(socket_path)
@@ -601,6 +618,7 @@ class IntrospectionTests(unittest.TestCase):
                 {
                     introspect.WORKER_NETWORK_ENV: "unix",
                     introspect.WORKER_ADDRESS_ENV: socket_path,
+                    introspect.WORKER_TOKEN_ENV: direct_token,
                     introspect.WORKER_TOKEN_FILE_ENV: str(token_path),
                     "PYTHONDONTWRITEBYTECODE": "1",
                 }
@@ -610,9 +628,9 @@ class IntrospectionTests(unittest.TestCase):
                     sys.executable,
                     str(SCRIPT_PATH),
                     "--project",
-                    str(PROJECT_ROOT),
+                    str(project),
                     "--settings",
-                    "sample_project.settings",
+                    "settings",
                     "--connect",
                 ],
                 cwd=REPOSITORY_ROOT,
@@ -637,7 +655,7 @@ class IntrospectionTests(unittest.TestCase):
             )
             snapshot = introspect.decode_object(reader.read())["result"]
             self.assertEqual(snapshot["schema_version"], 1)
-            self.assertEqual(list(snapshot["apps"]["myapp"]["models"]), list(models(self.snapshot)))
+            self.assertEqual(snapshot["apps"], {})
             introspect.write_message(
                 connection,
                 {"protocol_version": 1, "id": "3", "method": "worker/shutdown", "params": {}},
@@ -648,7 +666,9 @@ class IntrospectionTests(unittest.TestCase):
             stdout, stderr = process.communicate(timeout=5)
             self.assertEqual(process.returncode, 0, stderr)
             self.assertEqual(stdout, b"")
+            self.assertIn(b"settings startup output", stderr)
             self.assertNotIn(token.encode(), stderr)
+            self.assertNotIn(direct_token.encode(), stderr)
             self.assertTrue(Path(socket_path).exists())
 
     def test_startup_output_proxy_generic_relation_constraints_and_method_safety(self):

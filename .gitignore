@@ -64,4 +64,5 @@ testdata/sample_django_project/db.sqlite3-*
 # VS Code extension build and package artifacts
 /client/vscode/node_modules/
 /client/vscode/out/
+/client/vscode/bin/
 /client/vscode/*.vsix

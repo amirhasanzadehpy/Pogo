@@ -42,8 +42,8 @@ Go suite with race detection. `make bench` measures parse-update, completion,
 diagnostic and definition handlers; end-to-end p50/p95; schema
 refresh; graph lookup; and server/worker RSS.
 
-`make fuzz` runs 30-second campaigns for worker and LSP framing, UTF-16
-position/edit conversion, ORM path extraction, and parser recovery. `make
+`make fuzz` runs 30-second campaigns for worker environment parsing, worker and
+LSP framing, UTF-16 position/edit conversion, ORM path extraction, and parser recovery. `make
 compat` creates isolated temporary environments and runs the fixture and worker
 suites against the pinned Django 4.2 and 5.2 profiles for the current Python.
 
@@ -79,10 +79,80 @@ build/pogo \
   -log-file build/protocol.log
 ```
 
+`-worker-env-file PATH` is the CLI equivalent of
+`djangoOrm.environmentFile`. Relative paths resolve against `-project`; an
+explicit absolute path may be outside the project. For an environment-dependent
+project, add `-worker-env-file .env.pogo` to the command after creating that
+ignored file under the project root. There is deliberately no `KEY=value` CLI
+flag because process listings can expose argument values.
+
+Worker configuration sources are:
+
+| Value | LSP initialization | CLI |
+| --- | --- | --- |
+| Project root | `djangoOrm.projectRoot` | `-project PATH` |
+| Python interpreter | `djangoOrm.pythonPath` | `-python PATH` |
+| Settings module | `djangoOrm.settingsModule` | `-settings MODULE` |
+| Environment file | `djangoOrm.environmentFile` | `-worker-env-file PATH` |
+| Environment literals | `djangoOrm.environment` as `Record<string, string \| null>` | Not supported |
+
+Resolution order is CLI then initialization options. If Python is still empty,
+Pogo requires the project-local `.venv`; it never consults `VIRTUAL_ENV` or a
+global `python3` on `PATH`. If settings are still empty, Pogo checks an explicit
+worker `DJANGO_SETTINGS_MODULE`, a literal `manage.py` setting, then one
+unambiguous immediate `*/settings.py`. Ambient `DJANGO_SETTINGS_MODULE` is not a
+configuration source. Explicit settings that conflict with the worker
+environment fail configuration, as do ambiguous settings.
+
 The worker starts after the LSP `initialized` notification, communicates over a
 private local endpoint using bounded protocol-v1 JSON frames, and is stopped and
 reaped on shutdown, exit, or stdio EOF. Worker and project output is forwarded
 to the language-server log and never to LSP stdout.
+
+### Worker Environment
+
+The coordinator may inherit its parent environment normally, but manager
+construction creates a separate worker snapshot containing only the
+coordinator's snapshotted `PATH` as a baseline. Precedence is environment file,
+nullable LSP literals, then Pogo-owned runtime values. A string literal replaces the file
+value and `null` removes it. Reserved transport, Python, temporary-directory,
+and platform keys fail on collision instead of being silently replaced. Pogo
+never synthesizes project configuration such as `SECRET_KEY`, database URLs,
+settings, or fallback databases.
+
+Environment files are explicit only; `.env` names are never auto-discovered.
+The bounded parser supports UTF-8 dotenv-style blank lines, comments, optional
+`export`, portable keys, empty/unquoted/single-quoted/double-quoted values, and
+multiline quoted values. It performs no variable expansion, command
+substitution, shell execution, or ambient lookup. Malformed input, duplicate or
+invalid keys, invalid UTF-8/NUL, unsupported escapes, and limit violations fail
+manager configuration without logging values. Limits are 256 KiB per file, 256
+variables, 256 bytes per key, 16 KiB per value, and 30,000 total portable
+environment units. The variable and total-unit limits apply to the complete
+process environment, including Pogo-owned entries, so explicit configuration
+must leave capacity for those fixed/runtime values.
+
+Single quotes are literal. Double quotes accept only `\\`, `\"`, `\n`, `\r`,
+and `\t` escapes. In unquoted values, `#` starts a comment only after
+whitespace, so URL fragments remain literal.
+
+The manager opens and parses the file once. Retries and schema refreshes reuse
+the immutable snapshot, so an edit requires a server/client restart. On POSIX,
+Pogo logs a warning if the selected file is group- or world-readable. Use an
+ignored, permission-restricted `.env.pogo` for real values and track a
+value-free `.env.pogo.example` that lists required keys. Literal environment
+values cross LSP initialization and may appear in protocol traces, so they are
+only suitable for nonsecrets.
+
+The worker receives fixed Python startup values, a `PATH` containing the
+interpreter directory followed by the coordinator's snapshotted search path,
+private session temp paths, the required Windows platform value,
+and private authenticated transport metadata. Ambient `HOME`, `USERPROFILE`,
+`VIRTUAL_ENV`, `PYTHONPATH`, `PYTHONHOME`, locale, proxy, cloud, CI, database,
+certificate, and linker/native-library variables are not inherited. An explicit
+worker `PATH` replaces the default. Projects must explicitly opt in to any
+required locale, proxy, certificate path, or native-library search path. The worker runs with the
+project root as its current directory for manage.py-compatible relative paths.
 
 Open Python documents are parsed incrementally in Go with only the Python
 grammar embedded in release builds. Completion and hover resolve direct fields,
@@ -130,7 +200,11 @@ without activating it:
 Django startup imports and executes code from the target project. Only run the
 fixture tools and future language server against trusted workspaces. Local IPC
 authentication prevents unrelated clients from connecting, but it is not a
-sandbox for project code.
+sandbox for project code. Environment isolation prevents accidental ambient
+application-variable forwarding other than `PATH`; it does not restrict filesystem access,
+user-site packages, databases, subprocesses, or the network. The coordinator's
+inherited editor/shell environment remains separate from the explicit worker
+snapshot.
 
 ## Performance Profiles
 
@@ -247,13 +321,17 @@ go version -m build/pogo
 The inspection rejects fixture markers in release binaries, rejects production
 dependency paths containing `testdata` or `internal/harness`, and AST-checks the
 embedded worker import roots against the Python standard library plus Django.
+When passed `--vsix`, it also requires all six bundled targets, executable mode
+on POSIX entries, source/package version agreement, and byte identity with the
+inspected standalone binaries.
 
 Publishing is tag-driven. After the release version in the server and VS Code
 extension matches `X.Y.Z`, commit and push those changes to `main`, then push a
 `vX.Y.Z` tag for that commit. The CI release job rejects tags whose commit is
 not already on `main`, waits for all compatibility, race, native transport,
 cross-build, and performance jobs, then publishes Linux, macOS, and Windows
-archives for amd64/arm64, the VSIX, and `checksums.txt` to GitHub Releases.
+archives for amd64/arm64, a VSIX containing those binaries, and `checksums.txt`
+to GitHub Releases.
 Non-version tags are never published.
 
 For a clean-room verification, export `HEAD` into a temporary directory, set

@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml"><img src="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-56e39f?style=flat-square" alt="Release v0.1.0"></a>
+  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/release-v0.2.0-56e39f?style=flat-square" alt="Release v0.2.0"></a>
   <img src="https://img.shields.io/badge/Go-1.22%2B-42b7ff?style=flat-square" alt="Go 1.22 or newer">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square" alt="Python 3.10 through 3.13">
   <img src="https://img.shields.io/badge/Django-4.2%20%7C%205.2-0c4b33?style=flat-square" alt="Django 4.2 and 5.2">
@@ -105,12 +105,25 @@ matrix, methodology, profiling commands, and CI artifact layout.
 
 ## Quick Start
 
-The shortest supported path is a release binary plus the first-party VS Code
-extension.
+For VS Code, install one extension. The extension includes the matching Pogo
+server for supported Linux, macOS, and Windows extension hosts on amd64/arm64.
 
-### 1. Install The Server
+### VS Code
 
-Download the archive for your OS and CPU from
+Download `pogo-0.2.0.vsix` from
+[GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases), then run:
+
+```sh
+code --install-extension "$HOME/Downloads/pogo-0.2.0.vsix"
+```
+
+You can also run **Extensions: Install from VSIX...** from the command palette.
+No separate Pogo binary or `pogo.executablePath` setting is required. Reload VS
+Code after installation and select the project's Python environment normally.
+
+### Standalone Binary
+
+For Neovim, Zed, another LSP client, or command-line use, download the archive for your OS and CPU from
 [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases). Every
 release includes Linux, macOS, and Windows builds for `amd64` and `arm64`, plus
 `checksums.txt`.
@@ -121,7 +134,7 @@ The commands below use common architectures as examples. Replace `amd64` with
 Linux and macOS archives contain one `pogo` executable:
 
 ```sh
-tar -xzf pogo-v0.1.0-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
+tar -xzf pogo-v0.2.0-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
 mkdir -p "$HOME/.local/bin"
 install -m 0755 pogo "$HOME/.local/bin/pogo"
 export PATH="$HOME/.local/bin:$PATH"
@@ -137,7 +150,7 @@ The example uses `windows-amd64`; substitute `windows-arm64` in both commands on
 Windows on Arm.
 
 ```powershell
-Expand-Archive .\pogo-v0.1.0-windows-amd64.zip -DestinationPath .\pogo
+Expand-Archive .\pogo-v0.2.0-windows-amd64.zip -DestinationPath .\pogo
 $PogoBin = Join-Path $HOME ".local\bin"
 New-Item -ItemType Directory -Force $PogoBin | Out-Null
 Copy-Item .\pogo\pogo.exe "$PogoBin\pogo.exe"
@@ -157,49 +170,41 @@ This repository is private, so authenticate `gh` before downloading:
 
 ```sh
 gh auth login
-gh release download v0.1.0 \
+gh release download v0.2.0 \
   --repo amirhasanzadehpy/Pogo \
-  --pattern 'pogo-v0.1.0-linux-amd64.tar.gz' \
+  --pattern 'pogo-v0.2.0-linux-amd64.tar.gz' \
   --pattern checksums.txt
 sha256sum --check --ignore-missing checksums.txt
 ```
 
 Change the `--pattern` target to match your OS and CPU. On macOS, download the
 matching `darwin` archive and calculate its digest with
-`shasum -a 256 pogo-v0.1.0-darwin-arm64.tar.gz` and compare it with the matching
+`shasum -a 256 pogo-v0.2.0-darwin-arm64.tar.gz` and compare it with the matching
 line in `checksums.txt`. On Windows, use:
 
 ```powershell
-Get-FileHash .\pogo-v0.1.0-windows-amd64.zip -Algorithm SHA256
+Get-FileHash .\pogo-v0.2.0-windows-amd64.zip -Algorithm SHA256
 ```
 
 </details>
 
-### 2. Install The VS Code Extension
-
-Download `pogo-0.1.0.vsix` from the same release, then run:
-
-```sh
-code --install-extension "$HOME/Downloads/pogo-0.1.0.vsix"
-```
-
-You can also run **Extensions: Install from VSIX...** from the command palette.
-Reload VS Code after installation.
-
-### 3. Open A Django Project
+### Open A Django Project
 
 Open the trusted workspace containing `manage.py`, then open a Python file. By
 default Pogo discovers:
 
 - The workspace folder as the project root.
-- An active `VIRTUAL_ENV`, then the project's `.venv`.
-- `DJANGO_SETTINGS_MODULE`, the literal setting in `manage.py`, or one
-  unambiguous immediate `*/settings.py`.
+- VS Code's active Python environment, then the project's `.venv`, when using
+  the extension and no Pogo interpreter override is set.
+- An explicitly configured worker `DJANGO_SETTINGS_MODULE`, the literal setting
+  in `manage.py`, or one unambiguous immediate `*/settings.py`.
 
 The selected interpreter must already contain Django and every dependency your
-project imports during `django.setup()`.
+project imports during `django.setup()`. Pogo does not select Python from an
+ambient `VIRTUAL_ENV` or global `PATH`, and it does not use an ambient
+`DJANGO_SETTINGS_MODULE`.
 
-### 4. Verify ORM Intelligence
+### Verify ORM Intelligence
 
 Request completion while typing a relation path:
 
@@ -293,23 +298,39 @@ add only the required overrides to `.vscode/settings.json`:
 
 ```json
 {
-  "pogo.executablePath": "/absolute/path/to/pogo",
   "pogo.pythonPath": ".venv/bin/python",
   "pogo.settingsModule": "config.settings",
-  "pogo.envFile": ".env",
+  "pogo.envFile": ".env.pogo",
   "pogo.environment": {
+    "APP_MODE": "development",
     "DEBUG": null
   }
 }
 ```
 
-Relative paths resolve from each workspace folder. Environment precedence is
-extension host, dotenv file, then `pogo.environment`; `null` removes an
-inherited value. Keep credentials in an ignored, permission-restricted dotenv
-file rather than workspace settings.
+Relative paths resolve from each workspace folder. The extension sends the
+absolute environment-file path to Pogo and never reads or sends its contents.
+No `.env` variant is discovered automatically. The worker starts with no
+ambient application variables, loads the file, then applies
+`pogo.environment`; a string replaces a file value and `null` removes it.
+
+Keep secrets in an ignored, permission-restricted `.env.pogo`, and commit a
+value-free `.env.pogo.example` that documents required keys. On POSIX, Pogo
+warns when the selected environment file is group- or world-readable. File
+contents are snapshotted when the Pogo manager starts, so restart the client or
+reload the window after editing the file. Literal `pogo.environment` values
+cross LSP initialization and can appear in LSP traces; use them only for
+nonsecret configuration.
+
+Pogo does not synthesize a `SECRET_KEY`, database URL, settings module, or
+fallback database. The worker inherits only the coordinator's snapshotted
+`PATH` so ordinary project imports can locate tools such as Git. An explicit
+worker `PATH` replaces that default. The worker does not inherit
+`VIRTUAL_ENV`, `PYTHONPATH`, `PYTHONHOME`, proxy, locale, cloud, database, or CI
+variables from VS Code.
 
 Remote SSH, WSL, Dev Containers, and Codespaces run Pogo on the remote extension
-host. Install the binary there, not only on the local desktop.
+host. VS Code installs the extension and uses its matching bundled binary there.
 
 ### Neovim
 
@@ -325,9 +346,12 @@ vim.lsp.config("pogo", {
 vim.lsp.enable("pogo")
 ```
 
-Use `init_options.djangoOrm.pythonPath` and
-`init_options.djangoOrm.settingsModule` only when discovery is ambiguous. Run
-`:checkhealth vim.lsp` to inspect the active root, command, and logs.
+Use `init_options.djangoOrm.pythonPath`,
+`init_options.djangoOrm.settingsModule`,
+`init_options.djangoOrm.environmentFile`, and
+`init_options.djangoOrm.environment` for explicit project configuration. Run
+`:checkhealth vim.lsp` to inspect the active root, command, and logs. Environment
+file paths sent by other clients are resolved against the project root by Pogo.
 
 <details>
 <summary>Zed bridge configuration</summary>
@@ -376,10 +400,11 @@ flowchart LR
     G -->|completion, hover, diagnostics, navigation| E
 ```
 
-1. The editor initializes Pogo with a project root, interpreter, and optional
-   settings module.
+1. The editor initializes Pogo with a project root and optional interpreter,
+   settings, environment-file path, and nonsecret environment literals.
 2. Pogo extracts its embedded Python worker into a private temporary directory
-   and starts it with a random 256-bit authentication token.
+   and starts it with a random 256-bit authentication token and an explicit,
+   isolated process environment.
 3. The worker runs Django and returns fields, relations, managers, custom
    methods, indexes, constraints, source ranges, and backend-aware lookups.
 4. Go strictly validates the payload and builds indexed, immutable views.
@@ -418,7 +443,8 @@ server and formatter enabled.
 | Project root | Workspace folder | `djangoOrm.projectRoot` | `-project PATH` |
 | Python interpreter | `pogo.pythonPath` | `djangoOrm.pythonPath` | `-python PATH` |
 | Settings module | `pogo.settingsModule` | `djangoOrm.settingsModule` | `-settings MODULE` |
-| Environment file | `pogo.envFile` | Client-managed | Client-managed |
+| Worker environment file | `pogo.envFile` | `djangoOrm.environmentFile` | `-worker-env-file PATH` |
+| Worker environment literals | `pogo.environment` | `djangoOrm.environment` (`string` or `null` values) | Not accepted on the CLI |
 | Logs | Pogo output channel | Client stderr | `-log-file PATH` |
 
 <details>
@@ -436,19 +462,40 @@ Python interpreter:
 
 1. `-python`
 2. `djangoOrm.pythonPath`
-3. Active `VIRTUAL_ENV`
-4. Project `.venv`
-5. `python3` on `PATH`
+3. Project-local `.venv`
+4. Actionable configuration error
+
+Worker environment file:
+
+1. `-worker-env-file`
+2. `djangoOrm.environmentFile`
+3. No file; Pogo never auto-discovers `.env` variants
+
+Relative environment-file and interpreter paths resolve against the project
+root. Explicit absolute environment files may be outside the project.
 
 Django settings:
 
 1. `-settings`
 2. `djangoOrm.settingsModule`
-3. `DJANGO_SETTINGS_MODULE`
+3. `DJANGO_SETTINGS_MODULE` from the explicitly merged worker environment
 4. A literal `os.environ.setdefault(...)` value in `manage.py`
 5. One unambiguous immediate `*/settings.py`
 
+An explicit settings value that conflicts with the explicitly merged worker
+`DJANGO_SETTINGS_MODULE` fails configuration. Equal values are accepted.
 Ambiguous settings fail with an actionable error instead of an arbitrary guess.
+
+Worker environment precedence:
+
+1. Coordinator `PATH` as the only inherited baseline variable
+2. Explicit environment file
+3. `djangoOrm.environment` literals, where `null` removes a file value
+4. Pogo-owned Python, private temp, platform, and authenticated transport values
+
+Reserved Pogo runtime keys cannot be overridden. The file and literal map are
+validated and snapshotted once per manager, so retries and schema refreshes use
+the same values until Pogo restarts.
 
 </details>
 
@@ -456,16 +503,18 @@ Ambiguous settings fail with an actionable error instead of an arbitrary guess.
 
 | Symptom | Check |
 | --- | --- |
-| Editor cannot find Pogo | Run `pogo -version` from the editor host, or configure an absolute executable path |
-| ORM results are empty | Confirm the selected interpreter can import Django, the project, and its dependencies |
+| VS Code cannot start bundled Pogo | Reinstall the VSIX and confirm the extension host uses supported Linux, macOS, or Windows on amd64/arm64; custom builds may set an absolute executable path |
+| ORM results are empty | Confirm the selected interpreter can import Django, the project, and its dependencies; inspect the Pogo log for a missing explicit worker variable |
 | Results are stale after a save | Check the Pogo output/log for a failed Django refresh; the last valid graph remains active |
-| Wrong virtual environment | Clear the inherited `VIRTUAL_ENV` or set the editor's explicit Python path |
+| Python interpreter is not found | Create the project `.venv` or set an explicit interpreter; ambient `VIRTUAL_ENV` and global Python are intentionally ignored |
+| Environment-file edit has no effect | Restart the Pogo client or reload the editor; the file is snapshotted once, not reread on refresh |
+| Django needs a native library or proxy | Explicitly configure the required native-library path, certificate/proxy variables, or locale; ordinary subprocess lookup uses the coordinator `PATH` automatically |
 | Multiple projects in one window | Use one LSP root per project; VS Code creates one client per workspace folder automatically |
 
-Desktop applications on macOS may not inherit your shell `PATH`. Configure
-`pogo.executablePath` or start VS Code from a terminal. If Gatekeeper blocks a
-verified binary, approve it in **System Settings > Privacy & Security** or run
-`xattr -d com.apple.quarantine ~/.local/bin/pogo` after checking its digest.
+If Gatekeeper blocks a verified standalone macOS binary, approve it in **System
+Settings > Privacy & Security** or remove its quarantine attribute after
+checking its digest. The VS Code extension does not depend on a shell-installed
+Pogo executable.
 
 ## Build And Contribute
 
@@ -506,15 +555,25 @@ performance profiling, release inspection, and versioning.
 ## Security
 
 Pogo starts Django, and `django.setup()` imports and executes code from the
-project. That code has the editor process's access to files, databases,
-services, credentials, and the network. Use Pogo only with trusted workspaces.
-The VS Code extension is disabled in untrusted and virtual workspaces.
+project. The Go coordinator may naturally inherit its editor or shell
+environment for normal process operation. Pogo forwards only a snapshotted
+`PATH` for ordinary subprocess lookup, not ambient application variables. The
+worker otherwise receives explicit project values and Pogo-owned runtime values; it receives no
+ambient `VIRTUAL_ENV`, Python/Django settings, cloud, database, CI, locale, or
+proxy configuration.
+
+This isolation is not an OS sandbox. Trusted project code still runs with the
+user's access to files, user-site packages, databases, services, and the
+network, and can discover information through those capabilities. Use Pogo only
+with trusted workspaces. The VS Code extension is disabled in untrusted and
+virtual workspaces. Put secrets in a protected environment file rather than
+literal LSP initialization values or command-line arguments.
 
 ## Releases
 
 Version tags are built only after the complete compatibility, race, native
 transport, cross-build, and performance matrix passes. CI publishes six binary
-archives, the VS Code VSIX, generated release notes, and `checksums.txt` to
+archives, a VS Code VSIX containing those six binaries, generated release notes, and `checksums.txt` to
 [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases).
 
 For bugs and feature requests, use

@@ -19,7 +19,11 @@ import (
 )
 
 func TestManagerDefaultSchemaLoadTimeoutSupportsLargeColdProjects(t *testing.T) {
-	manager, err := NewManager(Config{ProjectRoot: t.TempDir()}, &schema.Cache{}, nil)
+	pythonPath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(Config{ProjectRoot: t.TempDir(), PythonPath: pythonPath}, &schema.Cache{}, nil)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -34,7 +38,7 @@ func TestManagerDefaultSchemaLoadTimeoutSupportsLargeColdProjects(t *testing.T) 
 	}
 
 	const override = 17 * time.Second
-	overridden, err := NewManager(Config{ProjectRoot: t.TempDir(), RequestTimeout: override}, &schema.Cache{}, nil)
+	overridden, err := NewManager(Config{ProjectRoot: t.TempDir(), PythonPath: pythonPath, RequestTimeout: override}, &schema.Cache{}, nil)
 	if err != nil {
 		t.Fatalf("NewManager() with override error = %v", err)
 	}
@@ -59,7 +63,6 @@ func TestManagerLoadsFixtureAndCleansRuntime(t *testing.T) {
 	manager, err := NewManager(Config{
 		ProjectRoot:    filepath.Join(root, "testdata", "sample_django_project"),
 		PythonPath:     pythonPath,
-		SettingsModule: "sample_project.settings",
 		ConnectTimeout: 5 * time.Second,
 		RequestTimeout: 10 * time.Second,
 	}, cache, nil)
@@ -536,7 +539,7 @@ func TestManagerFailedRefreshRetainsCacheAndNotifiesOnce(t *testing.T) {
 	_ = manager.Stop(stopContext)
 }
 
-func TestManagerActualStartupFailureRetainsCacheAndNotifiesOnce(t *testing.T) {
+func TestManagerRejectsMissingPythonBeforeStart(t *testing.T) {
 	project := t.TempDir()
 	retained, err := schema.Build(schema.Snapshot{
 		SchemaVersion: 1, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
@@ -547,37 +550,15 @@ func TestManagerActualStartupFailureRetainsCacheAndNotifiesOnce(t *testing.T) {
 	}
 	cache := &schema.Cache{}
 	cache.Replace(retained)
-	manager, err := NewManager(Config{
+	_, err = NewManager(Config{
 		ProjectRoot: project, PythonPath: filepath.Join(project, "missing-python"),
 		RestartLimit: 1, BackoffBase: time.Millisecond,
 	}, cache, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	notified := make(chan struct{}, 2)
-	manager.Start(context.Background(), func(_ uint64, err error) {
-		if err != nil {
-			notified <- struct{}{}
-		}
-	})
-	select {
-	case <-notified:
-	case <-time.After(time.Second):
-		t.Fatal("worker startup failure was not reported")
-	}
-	time.Sleep(25 * time.Millisecond)
-	select {
-	case <-notified:
-		t.Fatal("worker startup outage was reported more than once")
-	default:
+	if err == nil || !strings.Contains(err.Error(), "inspect Python executable") {
+		t.Fatalf("NewManager() error = %v", err)
 	}
 	if graph, generation := cache.Load(); graph != retained || generation != 1 {
-		t.Fatalf("startup failure replaced cache: graph=%p generation=%d", graph, generation)
-	}
-	stopContext, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := manager.Stop(stopContext); err == nil || !strings.Contains(err.Error(), "start Python worker") {
-		t.Fatalf("Stop() error = %v", err)
+		t.Fatalf("configuration failure replaced cache: graph=%p generation=%d", graph, generation)
 	}
 }
 
@@ -658,6 +639,243 @@ func TestManagerRefreshesFixtureAfterSaveBurst(t *testing.T) {
 	}
 }
 
+func TestManagerActualWorkerUsesSnapshottedHermeticEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture environment uses a Unix virtualenv")
+	}
+	root := repositoryRoot(t)
+	pythonPath := filepath.Join(root, ".venv-fixture", "bin", "python")
+	if _, err := os.Stat(pythonPath); err != nil {
+		t.Skipf("fixture Python is unavailable: %v", err)
+	}
+	project := filepath.Join(t.TempDir(), "project")
+	copyFixtureProject(t, filepath.Join(root, "testdata", "sample_django_project"), project)
+	settingsPath := filepath.Join(project, "sample_project", "settings.py")
+	appendFile(t, settingsPath, `
+_expected_environment = {
+    "POGO_FILE_VALUE": "file-original",
+    "POGO_LITERAL_VALUE": "literal-original",
+    "POGO_OVERRIDDEN_VALUE": "literal-wins",
+}
+for _name, _value in _expected_environment.items():
+    if os.environ.get(_name) != _value:
+        raise RuntimeError(f"unexpected explicit worker environment: {_name}")
+for _name in (
+    "POGO_REMOVED_VALUE",
+    "AWS_SECRET_ACCESS_KEY",
+    "DATABASE_URL",
+    "CI",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "VIRTUAL_ENV",
+    "HOME",
+    "USERPROFILE",
+    "HTTPS_PROXY",
+    "SSL_CERT_FILE",
+    "LD_LIBRARY_PATH",
+):
+    if _name in os.environ:
+        raise RuntimeError(f"ambient worker environment leaked: {_name}")
+if any(_name.startswith("POGO_WORKER_") for _name in os.environ):
+    raise RuntimeError("worker transport environment leaked")
+if len({os.environ.get("TMPDIR"), os.environ.get("TMP"), os.environ.get("TEMP")}) != 1:
+    raise RuntimeError("worker temporary directories differ")
+if not os.environ.get("TMPDIR", "").endswith("tmp"):
+    raise RuntimeError("worker temporary directory is not private")
+`)
+	environmentPath := filepath.Join(project, "worker.env")
+	if err := os.WriteFile(environmentPath, []byte("DJANGO_SETTINGS_MODULE=sample_project.settings\nPOGO_FILE_VALUE=file-original\nPOGO_OVERRIDDEN_VALUE=file-loses\nPOGO_REMOVED_VALUE=remove-me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	literal := "literal-original"
+	override := "literal-wins"
+	configuredEnvironment := map[string]*string{
+		"POGO_LITERAL_VALUE":    &literal,
+		"POGO_OVERRIDDEN_VALUE": &override,
+		"POGO_REMOVED_VALUE":    nil,
+	}
+	for name, value := range map[string]string{
+		"AWS_SECRET_ACCESS_KEY": "ambient-aws-secret",
+		"DATABASE_URL":          "ambient-database",
+		"CI":                    "ambient-ci",
+		"PYTHONPATH":            "ambient-python-path",
+		"PYTHONHOME":            "ambient-python-home",
+		"VIRTUAL_ENV":           "ambient-virtual-environment",
+		"HOME":                  "ambient-home",
+		"USERPROFILE":           "ambient-profile",
+		"HTTPS_PROXY":           "ambient-proxy",
+		"SSL_CERT_FILE":         "ambient-certificate",
+		"LD_LIBRARY_PATH":       "ambient-native-path",
+		"POGO_WORKER_ADDRESS":   "ambient-transport",
+	} {
+		t.Setenv(name, value)
+	}
+	cache := &schema.Cache{}
+	logger := &captureLogger{}
+	manager, err := NewManager(Config{
+		ProjectRoot: project, PythonPath: pythonPath,
+		EnvironmentFile: environmentPath, Environment: configuredEnvironment,
+		ConnectTimeout: 5 * time.Second, RequestTimeout: 10 * time.Second, ShutdownTimeout: time.Second,
+	}, cache, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.refreshDelay = 10 * time.Millisecond
+
+	// Manager construction owns a deep snapshot of both configuration sources.
+	literal = "caller-mutated"
+	configuredEnvironment["POGO_ADDED_LATE"] = stringPointer("late")
+	if err := os.WriteFile(environmentPath, []byte("POGO_FILE_VALUE=file-mutated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	generations := make(chan uint64, 2)
+	failures := make(chan error, 1)
+	manager.Start(context.Background(), func(generation uint64, err error) {
+		if err != nil {
+			failures <- err
+			return
+		}
+		generations <- generation
+	})
+	if generation := waitForGeneration(t, generations); generation != 1 {
+		t.Fatalf("initial generation = %d", generation)
+	}
+	manager.DidSave(filepath.Join(project, "myapp", "models.py"))
+	if generation := waitForGeneration(t, generations); generation != 2 {
+		t.Fatalf("refresh generation = %d", generation)
+	}
+	select {
+	case failure := <-failures:
+		t.Fatalf("hermetic worker failed: %v; logs=%v", failure, logger.messages())
+	default:
+	}
+	stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := manager.Stop(stopContext); err != nil {
+		t.Fatalf("Stop() error = %v; logs=%v", err, logger.messages())
+	}
+	logs := strings.Join(logger.messages(), "\n")
+	for _, secret := range []string{"file-original", "literal-original", "literal-wins", "ambient-aws-secret", "ambient-database"} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("worker logs exposed environment value %q: %s", secret, logs)
+		}
+	}
+}
+
+func TestManagerBootstrapFailureRetainsLastValidGraph(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture environment uses a Unix virtualenv")
+	}
+	root := repositoryRoot(t)
+	pythonPath := filepath.Join(root, ".venv-fixture", "bin", "python")
+	if _, err := os.Stat(pythonPath); err != nil {
+		t.Skipf("fixture Python is unavailable: %v", err)
+	}
+	project := filepath.Join(t.TempDir(), "project")
+	copyFixtureProject(t, filepath.Join(root, "testdata", "sample_django_project"), project)
+	settingsPath := filepath.Join(project, "sample_project", "settings.py")
+	cache := &schema.Cache{}
+	logger := &captureLogger{}
+	manager, err := NewManager(Config{
+		ProjectRoot: project, PythonPath: pythonPath, SettingsModule: "sample_project.settings",
+		ConnectTimeout: 5 * time.Second, RequestTimeout: 10 * time.Second, ShutdownTimeout: time.Second,
+		RestartLimit: 1, BackoffBase: time.Millisecond,
+	}, cache, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.refreshDelay = 10 * time.Millisecond
+	generations := make(chan uint64, 2)
+	failures := make(chan error, 2)
+	manager.Start(context.Background(), func(generation uint64, err error) {
+		if err != nil {
+			failures <- err
+			return
+		}
+		generations <- generation
+	})
+	if generation := waitForGeneration(t, generations); generation != 1 {
+		t.Fatalf("initial generation = %d", generation)
+	}
+	retained, retainedGeneration := cache.Load()
+	appendFile(t, settingsPath, `
+if "POGO_REQUIRED_SETTING" not in os.environ:
+    raise RuntimeError("POGO_REQUIRED_SETTING is required")
+`)
+	manager.DidSave(settingsPath)
+	select {
+	case <-failures:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("bootstrap failure was not reported; logs=%v", logger.messages())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !logger.contains("POGO_REQUIRED_SETTING is required") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if current, generation := cache.Load(); current != retained || generation != retainedGeneration {
+		t.Fatalf("failed bootstrap replaced graph=%p generation=%d, want %p generation=%d", current, generation, retained, retainedGeneration)
+	}
+	if !logger.contains("Traceback") || !logger.contains("POGO_REQUIRED_SETTING is required") {
+		t.Fatalf("bootstrap failure details missing from logs: %v", logger.messages())
+	}
+	stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := manager.Stop(stopContext); err != nil && !strings.Contains(err.Error(), "load Django schema") {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestManagerMissingRequiredEnvironmentPublishesNoGraph(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture environment uses a Unix virtualenv")
+	}
+	root := repositoryRoot(t)
+	pythonPath := filepath.Join(root, ".venv-fixture", "bin", "python")
+	if _, err := os.Stat(pythonPath); err != nil {
+		t.Skipf("fixture Python is unavailable: %v", err)
+	}
+	project := filepath.Join(t.TempDir(), "project")
+	copyFixtureProject(t, filepath.Join(root, "testdata", "sample_django_project"), project)
+	appendFile(t, filepath.Join(project, "sample_project", "settings.py"), `
+if "POGO_REQUIRED_SETTING" not in os.environ:
+    raise RuntimeError("POGO_REQUIRED_SETTING is required")
+`)
+	if err := os.WriteFile(filepath.Join(project, ".env"), []byte("POGO_REQUIRED_SETTING=must-not-be-auto-loaded\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := &schema.Cache{}
+	logger := &captureLogger{}
+	manager, err := NewManager(Config{
+		ProjectRoot: project, PythonPath: pythonPath, SettingsModule: "sample_project.settings",
+		ConnectTimeout: 5 * time.Second, RequestTimeout: 10 * time.Second,
+		RestartLimit: 1, BackoffBase: time.Millisecond,
+	}, cache, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := make(chan error, 1)
+	manager.Start(context.Background(), func(_ uint64, err error) {
+		if err != nil {
+			failure <- err
+		}
+	})
+	select {
+	case <-failure:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("missing environment failure was not reported; logs=%v", logger.messages())
+	}
+	if graph, generation := cache.Load(); graph != nil || generation != 0 {
+		t.Fatalf("missing environment published graph=%p generation=%d", graph, generation)
+	}
+	if !logger.contains("POGO_REQUIRED_SETTING is required") {
+		t.Fatalf("missing environment detail was not logged: %v", logger.messages())
+	}
+	stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = manager.Stop(stopContext)
+}
+
 func waitForGeneration(t *testing.T, generations <-chan uint64) uint64 {
 	t.Helper()
 	select {
@@ -689,6 +907,21 @@ func copyFixtureProject(t *testing.T, source, destination string) {
 		}
 		return os.WriteFile(target, content, info.Mode())
 	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendFile(t *testing.T, path, content string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(content); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -813,19 +1046,6 @@ func TestStopReportsFinalCleanupError(t *testing.T) {
 	}
 }
 
-func TestCleanWorkerEnvironmentRemovesInheritedCredentials(t *testing.T) {
-	cleaned := cleanWorkerEnvironment([]string{
-		"PATH=/bin",
-		"POGO_WORKER_TOKEN=stale",
-		"POGO_WORKER_ADDRESS=stale",
-		"pogo_worker_token_file=stale",
-		"OTHER=value",
-	})
-	if strings.Join(cleaned, ",") != "PATH=/bin,OTHER=value" {
-		t.Fatalf("clean environment = %v", cleaned)
-	}
-}
-
 func TestManagerRestartsActualCrashingWorkersAndCleansEndpoints(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fault helper uses Unix endpoint paths")
@@ -836,7 +1056,9 @@ func TestManagerRestartsActualCrashingWorkersAndCleansEndpoints(t *testing.T) {
 		t.Skipf("fixture Python is unavailable: %v", err)
 	}
 	trackingPath := filepath.Join(t.TempDir(), "workers.txt")
-	t.Setenv("POGO_TEST_TRACK", trackingPath)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "ambient-crash-secret")
+	t.Setenv("DATABASE_URL", "ambient-crash-database")
+	t.Setenv("POGO_WORKER_TOKEN_FILE", "ambient-stale-token")
 	cache := &schema.Cache{}
 	manager, err := NewManager(Config{
 		ProjectRoot:     filepath.Join(root, "testdata", "sample_django_project"),
@@ -847,6 +1069,7 @@ func TestManagerRestartsActualCrashingWorkersAndCleansEndpoints(t *testing.T) {
 		RestartLimit:    3,
 		BackoffBase:     time.Millisecond,
 		StabilityWindow: time.Hour,
+		Environment:     map[string]*string{"POGO_TEST_TRACK": stringPointer(trackingPath)},
 	}, cache, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -898,6 +1121,9 @@ import os
 from pathlib import Path
 import socket
 
+for leaked_name in ("AWS_SECRET_ACCESS_KEY", "DATABASE_URL"):
+    if leaked_name in os.environ:
+        raise RuntimeError("ambient environment leaked: " + leaked_name)
 address = os.environ["POGO_WORKER_ADDRESS"]
 token_path = Path(os.environ["POGO_WORKER_TOKEN_FILE"])
 token = token_path.read_text()

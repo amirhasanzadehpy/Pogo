@@ -6,6 +6,7 @@ require (
 	github.com/odvcencio/gotreesitter v0.47.1
 	github.com/tliron/commonlog v0.2.10
 	github.com/tliron/glsp v0.2.2
+	golang.org/x/sys v0.18.0
 )
 
 require (
@@ -24,6 +25,5 @@ require (
 	github.com/tliron/kutil v0.3.14 // indirect
 	golang.org/x/crypto v0.21.0 // indirect
 	golang.org/x/net v0.21.0 // indirect
-	golang.org/x/sys v0.18.0 // indirect
 	golang.org/x/term v0.18.0 // indirect
 )
