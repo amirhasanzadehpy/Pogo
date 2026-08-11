@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,7 +15,7 @@ import (
 
 func TestPogoCLIIdentity(t *testing.T) {
 	var stderr bytes.Buffer
-	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.2.1\n" {
+	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.2.2\n" {
 		t.Fatalf("pogo -version = code %d, output %q", exitCode, stderr.String())
 	}
 	stderr.Reset()
@@ -118,7 +119,8 @@ func TestResolveWorkerConfigRequiresConfiguredPython(t *testing.T) {
 	if err == nil || enabled {
 		t.Fatalf("resolveWorkerConfig() = enabled %v, error %v", enabled, err)
 	}
-	if message := err.Error(); !strings.Contains(message, "set -python or djangoOrm.pythonPath") || !strings.Contains(message, filepath.Join(project, ".venv")) {
+	candidate := virtualEnvironmentPython(filepath.Join(project, ".venv"))
+	if message := err.Error(); !strings.Contains(message, "set -python or djangoOrm.pythonPath") || !strings.Contains(message, strconv.Quote(candidate)) {
 		t.Fatalf("missing Python error = %q", message)
 	}
 }

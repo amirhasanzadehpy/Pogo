@@ -16,7 +16,7 @@ import (
 
 const (
 	ServerName    = "pogo"
-	ServerVersion = "0.2.1"
+	ServerVersion = "0.2.2"
 )
 
 type lifecycleState uint8
