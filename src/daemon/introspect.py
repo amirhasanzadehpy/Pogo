@@ -24,6 +24,7 @@ LOOKUP_TRANSFORM_MAX_DEPTH = 2
 MAX_LOOKUP_PATHS = 512
 PROTOCOL_VERSION = 1
 MAX_IPC_FRAME_SIZE = 32 * 1024 * 1024
+MAX_IMPORTED_MODULES = 32768
 MAX_SCHEMA_SOURCE_MODULES = 4096
 MAX_SCHEMA_SOURCE_PATH_BYTES = 1024 * 1024
 WORKER_NETWORK_ENV = "POGO_WORKER_NETWORK"
@@ -796,11 +797,11 @@ def imported_project_sources(project_root, modules):
     sources = set()
     complete = True
     try:
-        candidates = list(itertools.islice(iter(modules.values()), MAX_SCHEMA_SOURCE_MODULES + 1))
+        candidates = list(itertools.islice(iter(modules.values()), MAX_IMPORTED_MODULES + 1))
     except (AttributeError, RuntimeError, TypeError, ValueError):
         return sources, False
-    if len(candidates) > MAX_SCHEMA_SOURCE_MODULES:
-        candidates = candidates[:MAX_SCHEMA_SOURCE_MODULES]
+    if len(candidates) > MAX_IMPORTED_MODULES:
+        candidates = candidates[:MAX_IMPORTED_MODULES]
         complete = False
     total_path_bytes = 0
     for module in candidates:
@@ -827,6 +828,10 @@ def imported_project_sources(project_root, modules):
             continue
         total_path_bytes += path_bytes
         sources.add(path)
+        if len(sources) > MAX_SCHEMA_SOURCE_MODULES:
+            complete = False
+            sources.remove(path)
+            break
     return sources, complete
 
 

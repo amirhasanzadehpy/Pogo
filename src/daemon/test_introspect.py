@@ -253,9 +253,17 @@ class IntrospectionTests(unittest.TestCase):
         self.assertFalse(complete)
 
         module = type("Module", (), {"__file__": str(PROJECT_ROOT / "myapp" / "models.py")})()
-        modules = {str(index): module for index in range(introspect.MAX_SCHEMA_SOURCE_MODULES + 1)}
+        external = type("ExternalModule", (), {"__file__": str(Path(__file__))})()
+        modules = {str(index): external for index in range(introspect.MAX_SCHEMA_SOURCE_MODULES + 1)}
+        modules["project"] = module
         sources, complete = introspect.imported_project_sources(PROJECT_ROOT, modules)
         self.assertIn(MODELS_PATH, sources)
+        self.assertTrue(complete)
+
+        modules = {str(index): external for index in range(introspect.MAX_IMPORTED_MODULES + 1)}
+        modules["project"] = module
+        sources, complete = introspect.imported_project_sources(PROJECT_ROOT, modules)
+        self.assertNotIn(MODELS_PATH, sources)
         self.assertFalse(complete)
 
     def test_bounded_schema_sources_marks_path_limit_incomplete(self):
