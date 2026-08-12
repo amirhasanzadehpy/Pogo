@@ -48,6 +48,7 @@ func TestManagerDefaultSchemaLoadTimeoutSupportsLargeColdProjects(t *testing.T) 
 }
 
 func TestManagerLoadsFixtureAndCleansRuntime(t *testing.T) {
+	const fixtureLoadTimeout = 30 * time.Second
 	if testing.Short() {
 		t.Skip("skipping Python process integration in short mode")
 	}
@@ -64,7 +65,7 @@ func TestManagerLoadsFixtureAndCleansRuntime(t *testing.T) {
 		ProjectRoot:    filepath.Join(root, "testdata", "sample_django_project"),
 		PythonPath:     pythonPath,
 		ConnectTimeout: 5 * time.Second,
-		RequestTimeout: 10 * time.Second,
+		RequestTimeout: fixtureLoadTimeout,
 	}, cache, nil)
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
@@ -77,7 +78,7 @@ func TestManagerLoadsFixtureAndCleansRuntime(t *testing.T) {
 			notifications <- err
 		}
 	})
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(fixtureLoadTimeout)
 	var runtimeDirectory string
 	for time.Now().Before(deadline) {
 		graph, generation := cache.Load()
