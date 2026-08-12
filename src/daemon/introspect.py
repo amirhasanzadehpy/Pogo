@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import importlib
 import inspect
+import itertools
 import io
 import json
 import os
@@ -18,11 +19,13 @@ import tokenize
 import traceback
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LOOKUP_TRANSFORM_MAX_DEPTH = 2
 MAX_LOOKUP_PATHS = 512
 PROTOCOL_VERSION = 1
 MAX_IPC_FRAME_SIZE = 32 * 1024 * 1024
+MAX_SCHEMA_SOURCE_MODULES = 4096
+MAX_SCHEMA_SOURCE_PATH_BYTES = 1024 * 1024
 WORKER_NETWORK_ENV = "POGO_WORKER_NETWORK"
 WORKER_ADDRESS_ENV = "POGO_WORKER_ADDRESS"
 WORKER_TOKEN_ENV = "POGO_WORKER_TOKEN"
@@ -788,6 +791,73 @@ def serialize_model(model, source_index, connection):
     }
 
 
+def imported_project_sources(project_root, modules):
+    root = Path(project_root).resolve()
+    sources = set()
+    complete = True
+    try:
+        candidates = list(itertools.islice(iter(modules.values()), MAX_SCHEMA_SOURCE_MODULES + 1))
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return sources, False
+    if len(candidates) > MAX_SCHEMA_SOURCE_MODULES:
+        candidates = candidates[:MAX_SCHEMA_SOURCE_MODULES]
+        complete = False
+    total_path_bytes = 0
+    for module in candidates:
+        try:
+            module_path = getattr(module, "__file__", None)
+        except Exception:
+            complete = False
+            continue
+        if not isinstance(module_path, (str, os.PathLike)) or isinstance(module_path, bytes):
+            if module_path is not None:
+                complete = False
+            continue
+        try:
+            resolved_path = Path(module_path).resolve()
+            if not resolved_path.is_file() or not resolved_path.is_relative_to(root):
+                continue
+            path = str(resolved_path)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            complete = False
+            continue
+        path_bytes = len(path.encode("utf-8"))
+        if path_bytes > MAX_SCHEMA_SOURCE_PATH_BYTES - total_path_bytes:
+            complete = False
+            continue
+        total_path_bytes += path_bytes
+        sources.add(path)
+    return sources, complete
+
+
+def bounded_schema_sources(root, sources, complete):
+    result = []
+    total_path_bytes = 0
+    try:
+        candidates = sorted(sources)
+    except (RuntimeError, TypeError, ValueError):
+        return result, False
+    for path in candidates:
+        if len(result) >= MAX_SCHEMA_SOURCE_MODULES:
+            complete = False
+            break
+        try:
+            resolved = Path(path).resolve()
+            if not resolved.is_relative_to(root):
+                continue
+            text = str(resolved)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            complete = False
+            continue
+        path_bytes = len(text.encode("utf-8"))
+        if path_bytes > MAX_SCHEMA_SOURCE_PATH_BYTES - total_path_bytes:
+            complete = False
+            continue
+        total_path_bytes += path_bytes
+        result.append(text)
+    return result, complete
+
+
 def build_snapshot(project_root, settings_name):
     from django.apps import apps
     from django.db import connections
@@ -819,7 +889,9 @@ def build_snapshot(project_root, settings_name):
     if settings_path:
         sources.add(str(Path(settings_path).resolve()))
     root = Path(project_root).resolve()
-    project_sources = sorted(path for path in sources if Path(path).is_relative_to(root))
+    imported_sources, sources_complete = imported_project_sources(root, sys.modules)
+    sources.update(imported_sources)
+    project_sources, sources_complete = bounded_schema_sources(root, sources, sources_complete)
 
     ordered_apps = {}
     for label in sorted(app_models):
@@ -832,6 +904,7 @@ def build_snapshot(project_root, settings_name):
         "lookup_transform_max_depth": LOOKUP_TRANSFORM_MAX_DEPTH,
         "lookup_path_max_count": MAX_LOOKUP_PATHS,
         "schema_sources": project_sources,
+        "schema_sources_complete": sources_complete,
         "apps": ordered_apps,
     }
 class FrameError(Exception):

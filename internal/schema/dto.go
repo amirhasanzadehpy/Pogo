@@ -6,6 +6,7 @@ type Snapshot struct {
 	LookupTransformMaxDepth int            `json:"lookup_transform_max_depth"`
 	LookupPathMaxCount      int            `json:"lookup_path_max_count"`
 	SchemaSources           []string       `json:"schema_sources"`
+	SchemaSourcesComplete   bool           `json:"schema_sources_complete"`
 	Apps                    map[string]App `json:"apps"`
 }
 

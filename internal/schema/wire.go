@@ -10,12 +10,12 @@ func ValidateWire(payload []byte) error {
 	if err := json.Unmarshal(payload, &root); err != nil {
 		return err
 	}
-	if err := requireKeys(root, "schema_version", "position_encoding", "lookup_transform_max_depth", "lookup_path_max_count", "schema_sources", "apps"); err != nil {
+	if err := requireKeys(root, "schema_version", "position_encoding", "lookup_transform_max_depth", "lookup_path_max_count", "schema_sources", "schema_sources_complete", "apps"); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	if err := requireKinds(root, map[string]jsonKind{
 		"schema_version": kindNumber, "position_encoding": kindString, "lookup_transform_max_depth": kindNumber,
-		"lookup_path_max_count": kindNumber, "schema_sources": kindArray, "apps": kindObject,
+		"lookup_path_max_count": kindNumber, "schema_sources": kindArray, "schema_sources_complete": kindBool, "apps": kindObject,
 	}); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}

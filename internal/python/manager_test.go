@@ -125,7 +125,7 @@ func TestManagerLoadsFixtureAndCleansRuntime(t *testing.T) {
 
 func TestManagerBoundsRestartsAndNotifiesOncePerOutage(t *testing.T) {
 	retainedGraph, err := schema.Build(schema.Snapshot{
-		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps: map[string]schema.App{},
 	})
 	if err != nil {
@@ -259,7 +259,7 @@ func TestManagerRejectsCandidateSupersededDuringLoad(t *testing.T) {
 	}
 	buildGraph := func() *schema.Graph {
 		graph, err := schema.Build(schema.Snapshot{
-			SchemaVersion: 1, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+			SchemaVersion: schema.Version, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 			Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: appRoot}},
 		})
 		if err != nil {
@@ -443,7 +443,7 @@ func TestManagerSchemaSavePolicyUsesSourcesAndAppRoots(t *testing.T) {
 	appRoot := filepath.Join(project, "myapp")
 	settings := filepath.Join(project, "sample_project", "settings.py")
 	graph, err := schema.Build(schema.Snapshot{
-		SchemaVersion: 1, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		SchemaVersion: schema.Version, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps:          map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: appRoot}},
 		SchemaSources: []string{settings},
 	})
@@ -472,7 +472,7 @@ func TestManagerFailedRefreshRetainsCacheAndNotifiesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	graph, err := schema.Build(schema.Snapshot{
-		SchemaVersion: 1, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		SchemaVersion: schema.Version, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: appRoot}},
 	})
 	if err != nil {
@@ -499,7 +499,7 @@ func TestManagerFailedRefreshRetainsCacheAndNotifiesOnce(t *testing.T) {
 			close(failed)
 		}
 		_, buildErr := schema.Build(schema.Snapshot{
-			SchemaVersion: 1, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+			SchemaVersion: schema.Version, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 			Apps: map[string]schema.App{"broken": {Label: "broken", ImportName: "broken", RootPath: "relative/path"}},
 		})
 		return false, fmt.Errorf("validate replacement schema: %w", buildErr)
@@ -542,7 +542,7 @@ func TestManagerFailedRefreshRetainsCacheAndNotifiesOnce(t *testing.T) {
 func TestManagerRejectsMissingPythonBeforeStart(t *testing.T) {
 	project := t.TempDir()
 	retained, err := schema.Build(schema.Snapshot{
-		SchemaVersion: 1, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		SchemaVersion: schema.Version, PositionEncoding: schema.PositionEncoding, LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps: map[string]schema.App{},
 	})
 	if err != nil {
@@ -1135,11 +1135,12 @@ connection.connect(address)
 connection.sendall((json.dumps({"protocol_version": 1, "type": "hello", "token": token}, separators=(",", ":")) + "\n").encode())
 request = json.loads(connection.makefile("rb").readline())
 snapshot = {
-    "schema_version": 1,
+    "schema_version": 2,
     "position_encoding": "utf-8-bytes",
     "lookup_transform_max_depth": 2,
     "lookup_path_max_count": 512,
     "schema_sources": [],
+    "schema_sources_complete": True,
     "apps": {},
 }
 response = {"protocol_version": 1, "id": request["id"], "result": snapshot, "error": None}

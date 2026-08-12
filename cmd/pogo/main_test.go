@@ -15,12 +15,27 @@ import (
 
 func TestPogoCLIIdentity(t *testing.T) {
 	var stderr bytes.Buffer
-	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.2.3\n" {
+	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.2.4\n" {
 		t.Fatalf("pogo -version = code %d, output %q", exitCode, stderr.String())
 	}
 	stderr.Reset()
 	if exitCode := run([]string{"-help"}, &stderr); exitCode != 0 || !strings.Contains(stderr.String(), "Usage: pogo [options]") || !strings.Contains(stderr.String(), "Pogo LSP 3.16 server") || !strings.Contains(stderr.String(), "-worker-env-file") {
 		t.Fatalf("pogo -help = code %d, output %q", exitCode, stderr.String())
+	}
+}
+
+func TestPogoCacheDirectoryUsesUserCache(t *testing.T) {
+	root := t.TempDir()
+	if runtime.GOOS == "windows" {
+		if directory := pogoCacheDirectory(); directory != "" {
+			t.Fatalf("pogoCacheDirectory() = %q, want disabled on Windows", directory)
+		}
+		return
+	} else {
+		t.Setenv("XDG_CACHE_HOME", root)
+	}
+	if directory := pogoCacheDirectory(); directory != filepath.Join(root, "pogo") {
+		t.Fatalf("pogoCacheDirectory() = %q", directory)
 	}
 }
 

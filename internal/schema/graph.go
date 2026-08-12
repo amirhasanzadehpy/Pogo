@@ -20,7 +20,7 @@ func MatchesSourceDigest(source []byte, digest string) bool {
 }
 
 const (
-	Version          = 1
+	Version          = 2
 	PositionEncoding = "utf-8-bytes"
 	maxLookupDepth   = 2
 	maxLookupPaths   = 512

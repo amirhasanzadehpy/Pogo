@@ -145,7 +145,7 @@ func TestModelSelfInferenceUsesFilePathResolvedAtOpen(t *testing.T) {
 	modelRange.FilePath = realPath
 	model.SourceRange = &modelRange
 	graph, err := schema.Build(schema.Snapshot{
-		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps: map[string]schema.App{"myapp": {
 			Label: "myapp", ImportName: "myapp", RootPath: root, Models: map[string]schema.Model{"Book": model},
 		}},
@@ -660,7 +660,7 @@ func featureTestGraph(t testingT) *schema.Graph {
 		QueryName: &storeQuery, AccessorName: &storeAccessor, SourceModel: "myapp.Store", SourceRange: featureTestSourceRange(),
 	}
 	graph, err := schema.Build(schema.Snapshot{
-		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps: map[string]schema.App{"myapp": {
 			Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(featureTestModelPath()),
 			Models: map[string]schema.Model{

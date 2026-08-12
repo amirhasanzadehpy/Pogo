@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml"><img src="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.2.3"><img src="https://img.shields.io/badge/release-v0.2.3-56e39f?style=flat-square" alt="Release v0.2.3"></a>
+  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.2.4"><img src="https://img.shields.io/badge/release-v0.2.4-56e39f?style=flat-square" alt="Release v0.2.4"></a>
   <img src="https://img.shields.io/badge/Go-1.22%2B-42b7ff?style=flat-square" alt="Go 1.22 or newer">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square" alt="Python 3.10 through 3.13">
   <img src="https://img.shields.io/badge/Django-4.2%20%7C%205.2-0c4b33?style=flat-square" alt="Django 4.2 and 5.2">
@@ -110,11 +110,11 @@ server for supported Linux, macOS, and Windows extension hosts on amd64/arm64.
 
 ### VS Code
 
-Download `pogo-0.2.3.vsix` from
+Download `pogo-0.2.4.vsix` from
 [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases), then run:
 
 ```sh
-code --install-extension "$HOME/Downloads/pogo-0.2.3.vsix"
+code --install-extension "$HOME/Downloads/pogo-0.2.4.vsix"
 ```
 
 You can also run **Extensions: Install from VSIX...** from the command palette.
@@ -134,7 +134,7 @@ The commands below use common architectures as examples. Replace `amd64` with
 Linux and macOS archives contain one `pogo` executable:
 
 ```sh
-tar -xzf pogo-v0.2.3-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
+tar -xzf pogo-v0.2.4-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
 mkdir -p "$HOME/.local/bin"
 install -m 0755 pogo "$HOME/.local/bin/pogo"
 export PATH="$HOME/.local/bin:$PATH"
@@ -150,7 +150,7 @@ The example uses `windows-amd64`; substitute `windows-arm64` in both commands on
 Windows on Arm.
 
 ```powershell
-Expand-Archive .\pogo-v0.2.3-windows-amd64.zip -DestinationPath .\pogo
+Expand-Archive .\pogo-v0.2.4-windows-amd64.zip -DestinationPath .\pogo
 $PogoBin = Join-Path $HOME ".local\bin"
 New-Item -ItemType Directory -Force $PogoBin | Out-Null
 Copy-Item .\pogo\pogo.exe "$PogoBin\pogo.exe"
@@ -170,20 +170,20 @@ This repository is private, so authenticate `gh` before downloading:
 
 ```sh
 gh auth login
-gh release download v0.2.3 \
+gh release download v0.2.4 \
   --repo amirhasanzadehpy/Pogo \
-  --pattern 'pogo-v0.2.3-linux-amd64.tar.gz' \
+  --pattern 'pogo-v0.2.4-linux-amd64.tar.gz' \
   --pattern checksums.txt
 sha256sum --check --ignore-missing checksums.txt
 ```
 
 Change the `--pattern` target to match your OS and CPU. On macOS, download the
 matching `darwin` archive and calculate its digest with
-`shasum -a 256 pogo-v0.2.3-darwin-arm64.tar.gz` and compare it with the matching
+`shasum -a 256 pogo-v0.2.4-darwin-arm64.tar.gz` and compare it with the matching
 line in `checksums.txt`. On Windows, use:
 
 ```powershell
-Get-FileHash .\pogo-v0.2.3-windows-amd64.zip -Algorithm SHA256
+Get-FileHash .\pogo-v0.2.4-windows-amd64.zip -Algorithm SHA256
 ```
 
 </details>
@@ -282,6 +282,26 @@ Saving Python under an installed Django app schedules a trailing-edge schema
 refresh. A valid generation replaces the graph atomically. If Django fails to
 reload, Pogo keeps the last valid graph and warns once, so editor features stay
 available while you fix the project error.
+
+On POSIX systems, the production server also keeps the last accepted runtime
+snapshot in Pogo's private operating-system user cache. On a later launch, a
+matching identity can publish that validated, potentially stale snapshot
+provisionally before Django finishes starting. Pogo still starts Python and
+verifies the project in the background;
+the authoritative runtime graph atomically replaces the provisional generation,
+while a startup failure leaves the provisional graph available with the normal
+stale-schema warning. Cache identity covers the project, interpreter identity,
+settings, complete snapshotted worker environment, coordinator `PATH`, worker
+and schema formats, and reported schema-source file identities. Cache filenames
+contain only a digest, not environment values.
+
+This improves eligible repeat launches on POSIX only; persistence is currently
+disabled on Windows. The first launch has no cache to read, and malformed,
+stale, oversized, non-private, unavailable, or incomplete-identity/manifest
+entries are treated as misses without suppressing normal Django startup. The
+manifest covers bounded imported project-root modules, not external package
+contents, so mandatory runtime verification is the source of authority. Editor
+feature handlers never access the filesystem or Python.
 
 ## Editor Setup
 
@@ -402,12 +422,16 @@ flowchart LR
 
 1. The editor initializes Pogo with a project root and optional interpreter,
    settings, environment-file path, and nonsecret environment literals.
-2. Pogo extracts its embedded Python worker into a private temporary directory
+2. On POSIX, Pogo may publish a matching, checksum-validated provisional graph from
+   the private user cache, then extracts its embedded Python worker into a
+   private temporary directory
    and starts it with a random 256-bit authentication token and an explicit,
    isolated process environment.
 3. The worker runs Django and returns fields, relations, managers, custom
    methods, indexes, constraints, source ranges, and backend-aware lookups.
-4. Go strictly validates the payload and builds indexed, immutable views.
+4. Go strictly validates the payload, builds indexed immutable views, atomically
+   replaces any provisional generation, and privately persists the accepted
+   non-superseded raw snapshot for a later launch.
 5. Editor features read that graph directly. Python returns only for a schema
    refresh, not for each completion or hover request.
 

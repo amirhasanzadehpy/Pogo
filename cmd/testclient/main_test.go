@@ -50,6 +50,7 @@ func TestLifecycleScenarios(t *testing.T) {
 				)
 			}
 			command := exec.CommandContext(ctx, clientPath, arguments...)
+			command.Env = append(os.Environ(), userCacheEnvironment(temp))
 			output, err := command.CombinedOutput()
 			if err != nil {
 				t.Fatalf("testclient failed: %v\n%s", err, output)
@@ -76,6 +77,13 @@ func TestLifecycleScenarios(t *testing.T) {
 	if !bytes.Contains(workerLog, []byte("schema cache generation=1 models=7")) {
 		t.Fatalf("worker log has no loaded schema generation:\n%s", workerLog)
 	}
+}
+
+func userCacheEnvironment(directory string) string {
+	if runtime.GOOS == "windows" {
+		return "LocalAppData=" + directory
+	}
+	return "XDG_CACHE_HOME=" + directory
 }
 
 func executablePath(directory, name string) string {

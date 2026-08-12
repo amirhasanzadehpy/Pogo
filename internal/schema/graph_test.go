@@ -235,6 +235,27 @@ func TestValidateWireRejectsMissingRequiredMembers(t *testing.T) {
 	}
 }
 
+func TestValidateWireRequiresSchemaSourcesCompleteness(t *testing.T) {
+	payload, err := json.Marshal(syntheticSnapshot(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(payload, &root); err != nil {
+		t.Fatal(err)
+	}
+	delete(root, "schema_sources_complete")
+	missing, _ := json.Marshal(root)
+	if err := ValidateWire(missing); err == nil {
+		t.Fatal("missing schema_sources_complete error = nil")
+	}
+	root["schema_sources_complete"] = "true"
+	wrongKind, _ := json.Marshal(root)
+	if err := ValidateWire(wrongKind); err == nil {
+		t.Fatal("non-boolean schema_sources_complete error = nil")
+	}
+}
+
 func TestValidateManagerWireRequiresQuerySetBindings(t *testing.T) {
 	method := Method{Name: "active", OwnerClass: "app.BaseQuerySet", SourceRange: testRange(2), Chainable: true}
 	manager := Manager{

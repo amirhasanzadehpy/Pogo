@@ -257,7 +257,7 @@ func navigationTestFeaturesWithSource(t navigationTestingT, modelsSource string)
 			},
 		},
 	}
-	graph, err := schema.Build(schema.Snapshot{SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512, Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: directory, Models: models}}})
+	graph, err := schema.Build(schema.Snapshot{SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512, Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: directory, Models: models}}})
 	if err != nil {
 		t.Fatal(err)
 	}

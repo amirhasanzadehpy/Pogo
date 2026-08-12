@@ -109,6 +109,45 @@ private local endpoint using bounded protocol-v1 JSON frames, and is stopped and
 reaped on shutdown, exit, or stdio EOF. Worker and project output is forwarded
 to the language-server log and never to LSP stdout.
 
+### Provisional Schema Cache
+
+On POSIX, production `cmd/pogo` managers opt into a persistent cache below
+`os.UserCacheDir()/pogo`; direct `python.NewManager` callers remain cache-free
+unless `Config.CacheDirectory` is explicitly set. Manager construction may
+only snapshot normalized configuration; after `initialized`, `Start` launches a
+cancellable cache load concurrently with the normal worker. A matching cached
+snapshot may publish as a potentially stale provisional immutable graph only if
+no existing or runtime authority has won. An accepted, non-superseded runtime snapshot atomically replaces the
+provisional generation and is persisted only after publication; worker failure
+retains the provisional generation and follows the existing outage notification
+path. While authority is provisional, every `.py` save below the project root is
+conservatively schema-affecting.
+
+Windows persistence is disabled until private DACL creation and native atomic
+replacement are implemented. The key is SHA-256 over canonical length-delimited normalized inputs: cache,
+protocol, schema, and worker extraction formats; canonical project and Python
+paths; portable interpreter stat identity; effective settings; the complete
+sorted snapshotted worker and platform environment; coordinator `PATH`; and the
+embedded worker digest. Automatic settings-selection files are content-hashed
+within entry and byte bounds; incomplete identity disables persistence. Values participate only in the digest and are never put
+in filenames or cache metadata. The record stores only digest identities, an
+explicit format version, checksum, source-file identity digest, and raw schema
+JSON. Reads are size-bounded before allocation, reject symlinks/non-regular or
+non-private entries where supported, reject duplicate/unknown/missing fields,
+then run wire validation, strict typed decoding, and `schema.Build` before
+publication.
+
+Writes use a private same-directory temporary file, file and directory sync,
+and rename under a final short authority check so an older refresh cannot
+replace newer cache authority. POSIX directories are mode `0700` and files mode
+`0600`; existing non-private directories are rejected rather than repaired.
+Unsupported permissions and cache-directory failures degrade to warnings and misses. Cache filesystem work remains out
+of LSP handlers and schema reads remain lock-free. There is no first-run
+improvement, and this cache does not suppress Python verification or cache
+bytecode/imported-module protocol data. The bounded source manifest includes
+imported modules under the project root but does not durably fingerprint external
+packages, so the cache is provisional rather than an exact-match authority.
+
 ### Worker Environment
 
 The coordinator may inherit its parent environment normally, but manager

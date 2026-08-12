@@ -359,7 +359,7 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	bookModel.QuerySetMethods = []schema.Method{activeMethod, hiddenMethod}
 	models["Book"] = bookModel
 	graph, err := schema.Build(schema.Snapshot{
-		SchemaVersion: 1, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
 		Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(inferenceTestModelPath()), Models: models}},
 	})
 	if err != nil {

@@ -98,13 +98,15 @@ class IntrospectionTests(unittest.TestCase):
                 "lookup_transform_max_depth",
                 "lookup_path_max_count",
                 "schema_sources",
+                "schema_sources_complete",
                 "apps",
             ],
         )
-        self.assertEqual(snapshot["schema_version"], 1)
+        self.assertEqual(snapshot["schema_version"], 2)
         self.assertEqual(snapshot["position_encoding"], "utf-8-bytes")
         self.assertEqual(snapshot["lookup_transform_max_depth"], 2)
         self.assertEqual(snapshot["lookup_path_max_count"], 512)
+        self.assertTrue(snapshot["schema_sources_complete"])
         self.assertEqual(list(snapshot["apps"]), ["myapp"])
         app = snapshot["apps"]["myapp"]
         self.assertEqual(set(app), {"label", "import_name", "root_path", "models"})
@@ -118,7 +120,10 @@ class IntrospectionTests(unittest.TestCase):
         self.assertEqual(
             snapshot["schema_sources"],
             [
+                str((PROJECT_ROOT / "myapp" / "__init__.py").resolve()),
+                str((PROJECT_ROOT / "myapp" / "apps.py").resolve()),
                 MODELS_PATH,
+                str((PROJECT_ROOT / "sample_project" / "__init__.py").resolve()),
                 str((PROJECT_ROOT / "sample_project" / "settings.py").resolve()),
             ],
         )
@@ -232,6 +237,40 @@ class IntrospectionTests(unittest.TestCase):
                 self.assertLessEqual(len(field["lookup_paths"]), snapshot["lookup_path_max_count"])
                 if field["related_model"] is not None:
                     self.assertIn(field["related_model"], known_models)
+
+    def test_imported_project_sources_is_bounded_and_defensive(self):
+        class RaisingModule:
+            @property
+            def __file__(self):
+                raise RuntimeError("raising proxy")
+
+        class Modules:
+            def values(self):
+                return iter([RaisingModule(), object(), type("BytesModule", (), {"__file__": b"bytes.py"})()])
+
+        sources, complete = introspect.imported_project_sources(PROJECT_ROOT, Modules())
+        self.assertEqual(sources, set())
+        self.assertFalse(complete)
+
+        module = type("Module", (), {"__file__": str(PROJECT_ROOT / "myapp" / "models.py")})()
+        modules = {str(index): module for index in range(introspect.MAX_SCHEMA_SOURCE_MODULES + 1)}
+        sources, complete = introspect.imported_project_sources(PROJECT_ROOT, modules)
+        self.assertIn(MODELS_PATH, sources)
+        self.assertFalse(complete)
+
+    def test_bounded_schema_sources_marks_path_limit_incomplete(self):
+        original = introspect.MAX_SCHEMA_SOURCE_PATH_BYTES
+        introspect.MAX_SCHEMA_SOURCE_PATH_BYTES = 1
+        try:
+            sources, complete = introspect.bounded_schema_sources(
+                PROJECT_ROOT,
+                {str(PROJECT_ROOT / "myapp" / "models.py")},
+                True,
+            )
+        finally:
+            introspect.MAX_SCHEMA_SOURCE_PATH_BYTES = original
+        self.assertEqual(sources, [])
+        self.assertFalse(complete)
 
     def test_book_author_golden_metadata(self):
         author = models(self.snapshot)["Book"]["fields"]["author"]
@@ -518,7 +557,7 @@ class IntrospectionTests(unittest.TestCase):
 
         def fake_builder(project_root, settings_name):
             calls.append((project_root, settings_name))
-            return {"schema_version": 1, "apps": {}}
+            return {"schema_version": 2, "apps": {}}
 
         introspect.build_snapshot = fake_builder
         try:
@@ -537,7 +576,7 @@ class IntrospectionTests(unittest.TestCase):
             reference = None
 
             def dump_schema(self):
-                snapshot = Snapshot(schema_version=1, apps={})
+                snapshot = Snapshot(schema_version=2, apps={})
                 self.reference = weakref.ref(snapshot)
                 return snapshot
 
@@ -713,7 +752,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
                 {"protocol_version": 1, "id": "2", "method": "schema/load", "params": {}},
             )
             snapshot = introspect.decode_object(reader.read())["result"]
-            self.assertEqual(snapshot["schema_version"], 1)
+            self.assertEqual(snapshot["schema_version"], 2)
             self.assertEqual(snapshot["apps"], {})
             introspect.write_message(
                 connection,

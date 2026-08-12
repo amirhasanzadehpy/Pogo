@@ -332,7 +332,7 @@ func inferenceTestGraph(t *testing.T) *schema.Graph {
 	nested.Qualname = "Namespace.Nested"
 	models["Nested"] = nested
 	graph, err := schema.Build(schema.Snapshot{
-		SchemaVersion:           1,
+		SchemaVersion:           schema.Version,
 		PositionEncoding:        "utf-8-bytes",
 		LookupTransformMaxDepth: 2,
 		LookupPathMaxCount:      512,

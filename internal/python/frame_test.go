@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/amirhasanzadehpy/Pogo/internal/schema"
 )
 
 func TestFrameRoundTripAndBounds(t *testing.T) {
@@ -201,6 +203,82 @@ func TestStrictJSONRejectsDuplicateKeysAndOversizedWrites(t *testing.T) {
 	}
 	if buffer.Len() != 0 {
 		t.Fatalf("oversized write emitted %d bytes", buffer.Len())
+	}
+}
+
+func TestDecodeSchemaResponsePreservesNestedStrictness(t *testing.T) {
+	valid := `{"protocol_version":1,"id":"1","result":{"schema_version":2,"position_encoding":"utf-8-bytes","lookup_transform_max_depth":2,"lookup_path_max_count":512,"schema_sources":[],"schema_sources_complete":true,"apps":{}},"error":null}`
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{name: "valid", payload: valid},
+		{name: "nested duplicate", payload: strings.Replace(valid, `"apps":{}`, `"apps":{},"apps":{}`, 1)},
+		{name: "unknown field", payload: strings.Replace(valid, `"apps":{}`, `"apps":{},"unknown":true`, 1)},
+		{name: "missing field", payload: strings.Replace(valid, `,"schema_sources":[]`, "", 1)},
+		{name: "wrong kind", payload: strings.Replace(valid, `"schema_version":2`, `"schema_version":"2"`, 1)},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			var snapshot schema.Snapshot
+			err := decodeResponse([]byte(test.payload), "1", &snapshot)
+			if test.name == "valid" && err != nil {
+				t.Fatalf("decodeResponse() error = %v", err)
+			}
+			if test.name != "valid" && err == nil {
+				t.Fatal("decodeResponse() error = nil")
+			}
+		})
+	}
+}
+
+func TestDecodeAfterDuplicateCheckRemainsStrict(t *testing.T) {
+	var value struct {
+		Name string `json:"name"`
+	}
+	for _, payload := range []string{`{"name":"value","extra":true}`, `{"name":1}`, `{"name":"value"}{}`} {
+		if err := decodeAfterDuplicateCheck([]byte(payload), &value); err == nil {
+			t.Fatalf("decodeAfterDuplicateCheck(%q) error = nil", payload)
+		}
+	}
+}
+
+func FuzzDecodeSchemaResponse(f *testing.F) {
+	for _, seed := range []string{
+		`{"protocol_version":1,"id":"1","result":{"schema_version":2,"position_encoding":"utf-8-bytes","lookup_transform_max_depth":2,"lookup_path_max_count":512,"schema_sources":[],"schema_sources_complete":true,"apps":{}},"error":null}`,
+		`{"protocol_version":1,"id":"1","result":{"apps":{},"apps":{}},"error":null}`,
+		`{"protocol_version":1,"id":"1","result":null,"error":{"code":"failed","message":"failed"}}`,
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, payload string) {
+		if len(payload) > 64*1024 {
+			t.Skip()
+		}
+		var snapshot schema.Snapshot
+		_ = decodeResponse([]byte(payload), "1", &snapshot)
+	})
+}
+
+func BenchmarkDecodeSchemaResponse(b *testing.B) {
+	snapshot := schema.Snapshot{
+		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, SchemaSourcesComplete: true,
+		LookupPathMaxCount: 512, SchemaSources: []string{}, Apps: map[string]schema.App{},
+	}
+	payload, err := marshalStrict(map[string]any{
+		"protocol_version": ProtocolVersion, "id": "1", "result": snapshot, "error": nil,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	for range b.N {
+		var decoded schema.Snapshot
+		if err := decodeResponse(payload, "1", &decoded); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

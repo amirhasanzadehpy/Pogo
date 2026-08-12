@@ -38,6 +38,7 @@ type Config struct {
 	SettingsModule  string
 	EnvironmentFile string
 	Environment     map[string]*string
+	CacheDirectory  string
 	ConnectTimeout  time.Duration
 	RequestTimeout  time.Duration
 	ShutdownTimeout time.Duration
@@ -72,7 +73,20 @@ type Manager struct {
 	refreshDeadline     time.Time
 	refreshDelay        time.Duration
 	refreshStarted      time.Time
+	cacheConfig         *persistentSchemaCacheConfig
+	authority           schemaAuthority
+	publishedAuthority  uint64
+	startID             uint64
 }
+
+type schemaAuthority uint8
+
+const (
+	authorityNone schemaAuthority = iota
+	authorityExisting
+	authorityProvisional
+	authorityRuntime
+)
 
 const schemaRefreshDebounce = 300 * time.Millisecond
 const defaultSchemaLoadTimeout = 90 * time.Second
@@ -178,14 +192,35 @@ func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, er
 	}
 	config.ProjectRoot = projectRoot
 	config.PythonPath = pythonPath
+	if config.CacheDirectory != "" {
+		cacheDirectory, cacheErr := filepath.Abs(config.CacheDirectory)
+		if cacheErr != nil {
+			if logger != nil {
+				logger.Warningf("disable provisional schema cache: %s", cacheErr)
+			}
+			config.CacheDirectory = ""
+		} else {
+			config.CacheDirectory = filepath.Clean(cacheDirectory)
+		}
+	}
 	config.Environment = nil
+	workerScript := workerdaemon.IntrospectPython
 	manager := &Manager{
 		config: config, cache: cache, log: logger,
 		workerEnvironment:   workerEnvironment,
 		platformEnvironment: platformEnvironment,
 		coordinatorPath:     probe.coordinatorPath,
 	}
-	manager.workerScript = workerdaemon.IntrospectPython
+	manager.workerScript = workerScript
+	if runtime.GOOS == "windows" && config.CacheDirectory != "" {
+		manager.warning("disable provisional schema cache: private Windows persistence is not implemented")
+		config.CacheDirectory = ""
+		manager.config.CacheDirectory = ""
+	}
+	manager.cacheConfig = newPersistentSchemaCacheConfig(config, pythonInfo, workerEnvironment, platformEnvironment, probe.coordinatorPath, workerScript)
+	if graph, _ := cache.Load(); graph != nil {
+		manager.authority = authorityExisting
+	}
 	manager.run = manager.runSession
 	return manager, nil
 }
@@ -204,12 +239,47 @@ func (manager *Manager) Start(parent context.Context, notify func(uint64, error)
 	manager.refreshPending = false
 	manager.releasedEpoch = manager.refreshEpoch
 	manager.refreshWake = make(chan struct{}, 1)
+	manager.startID++
+	startID := manager.startID
 	if manager.refreshDelay <= 0 {
 		manager.refreshDelay = schemaRefreshDebounce
 	}
 	manager.mu.Unlock()
 
+	if manager.cacheConfig != nil {
+		go manager.loadProvisional(ctx, startID, notify)
+	}
 	go manager.loop(ctx, done, notify)
+}
+
+func (manager *Manager) loadProvisional(ctx context.Context, startID uint64, notify func(uint64, error)) {
+	cache, err := manager.cacheConfig.open(ctx)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, context.Canceled) {
+			manager.warning("provisional schema cache unavailable: %s", err)
+		}
+		return
+	}
+	graph, err := cache.load(ctx)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, context.Canceled) {
+			manager.warning("provisional schema cache miss: %s", err)
+		}
+		return
+	}
+	manager.mu.Lock()
+	current, _ := manager.cache.Load()
+	if ctx.Err() != nil || manager.cancel == nil || manager.startID != startID || manager.authority != authorityNone || current != nil {
+		manager.mu.Unlock()
+		return
+	}
+	generation := manager.cache.Replace(graph)
+	manager.authority = authorityProvisional
+	manager.mu.Unlock()
+	manager.info("loaded provisional schema cache generation=%d models=%d", generation, graph.ModelCount())
+	if notify != nil {
+		notify(generation, nil)
+	}
 }
 
 func (manager *Manager) DidSave(path string) {
@@ -264,7 +334,10 @@ func (manager *Manager) schemaAffectingPath(path string) bool {
 		return false
 	}
 	absolute = canonicalPath(absolute)
-	if graph == nil && pathWithin(manager.config.ProjectRoot, absolute) {
+	manager.mu.Lock()
+	provisional := manager.authority == authorityProvisional
+	manager.mu.Unlock()
+	if (graph == nil || provisional) && pathWithin(manager.config.ProjectRoot, absolute) {
 		return true
 	}
 	if manager.config.SettingsModule != "" {
@@ -613,7 +686,7 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	var snapshot schema.Snapshot
 	requestContext, cancelRequest := context.WithTimeout(ctx, manager.config.RequestTimeout)
 	requestStarted := time.Now()
-	err = workerClient.Request(requestContext, "schema/load", &snapshot)
+	snapshotJSON, err := workerClient.request(requestContext, "schema/load", &snapshot)
 	cancelRequest()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -634,6 +707,7 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	}
 	wasLoaded = true
 	loaded(generation, graph.ModelCount())
+	manager.persistGraph(ctx, snapshotJSON)
 	loadedAt := time.Now()
 
 	select {
@@ -675,7 +749,48 @@ func (manager *Manager) publishGraph(ctx context.Context, graph *schema.Graph) (
 	if ctx.Err() != nil || manager.refreshPending || manager.activeEpoch != manager.refreshEpoch || manager.activeEpoch != manager.releasedEpoch {
 		return 0, false
 	}
-	return manager.cache.Replace(graph), true
+	generation := manager.cache.Replace(graph)
+	manager.authority = authorityRuntime
+	manager.publishedAuthority++
+	return generation, true
+}
+
+func (manager *Manager) persistGraph(ctx context.Context, snapshotJSON []byte) {
+	if manager.cacheConfig == nil {
+		return
+	}
+	cache, err := manager.cacheConfig.open(ctx)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			manager.warning("prepare provisional schema cache: %s", err)
+		}
+		return
+	}
+	manager.mu.Lock()
+	authority := manager.publishedAuthority
+	epoch := manager.activeEpoch
+	manager.mu.Unlock()
+	temporary, err := cache.writeTemp(ctx, snapshotJSON)
+	if err != nil {
+		manager.warning("write provisional schema cache: %s", err)
+		return
+	}
+	manager.mu.Lock()
+	if ctx.Err() != nil || authority != manager.publishedAuthority || epoch != manager.refreshEpoch {
+		manager.mu.Unlock()
+		_ = os.Remove(temporary.path)
+		return
+	}
+	err = cache.install(temporary)
+	manager.mu.Unlock()
+	if err != nil {
+		_ = os.Remove(temporary.path)
+		manager.warning("install provisional schema cache: %s", err)
+		return
+	}
+	if err := cache.syncDirectory(); err != nil {
+		manager.warning("sync provisional schema cache directory: %s", err)
+	}
 }
 
 func (manager *Manager) authenticate(parent context.Context, endpoint endpoint, token string) (net.Conn, error) {

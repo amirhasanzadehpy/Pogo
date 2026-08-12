@@ -54,6 +54,12 @@ func decodeStrict(payload []byte, destination any) error {
 	if err := rejectDuplicateKeys(payload); err != nil {
 		return err
 	}
+	return decodeAfterDuplicateCheck(payload, destination)
+}
+
+// decodeAfterDuplicateCheck preserves strict field and trailing-value checks
+// when an enclosing JSON value has already been checked recursively.
+func decodeAfterDuplicateCheck(payload []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
@@ -67,47 +73,55 @@ func decodeStrict(payload []byte, destination any) error {
 }
 
 func decodeResponse(payload []byte, expectedID string, result any) error {
+	_, err := decodeResponsePayload(payload, expectedID, result)
+	return err
+}
+
+func decodeResponsePayload(payload []byte, expectedID string, result any) ([]byte, error) {
 	if err := rejectDuplicateKeys(payload); err != nil {
-		return err
+		return nil, err
 	}
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return fmt.Errorf("decode worker response: %w", err)
+		return nil, fmt.Errorf("decode worker response: %w", err)
 	}
 	if len(envelope) != 4 || envelope["protocol_version"] == nil || envelope["id"] == nil || envelope["result"] == nil || envelope["error"] == nil {
-		return errors.New("worker response has invalid envelope")
+		return nil, errors.New("worker response has invalid envelope")
 	}
 	var version int
 	if err := json.Unmarshal(envelope["protocol_version"], &version); err != nil || version != ProtocolVersion {
-		return fmt.Errorf("worker protocol version mismatch")
+		return nil, fmt.Errorf("worker protocol version mismatch")
 	}
 	var id string
 	if err := json.Unmarshal(envelope["id"], &id); err != nil || id != expectedID {
-		return fmt.Errorf("worker response id mismatch")
+		return nil, fmt.Errorf("worker response id mismatch")
 	}
 	resultNull := bytes.Equal(bytes.TrimSpace(envelope["result"]), []byte("null"))
 	errorNull := bytes.Equal(bytes.TrimSpace(envelope["error"]), []byte("null"))
 	if !errorNull {
 		if !resultNull {
-			return errors.New("worker error response also contains a result")
+			return nil, errors.New("worker error response also contains a result")
 		}
 		var remote protocolError
-		if err := decodeStrict(envelope["error"], &remote); err != nil || remote.Code == "" || remote.Message == "" {
-			return errors.New("worker response has invalid structured error")
+		if err := decodeAfterDuplicateCheck(envelope["error"], &remote); err != nil || remote.Code == "" || remote.Message == "" {
+			return nil, errors.New("worker response has invalid structured error")
 		}
-		return &RemoteError{Code: remote.Code, Message: remote.Message}
+		return nil, &RemoteError{Code: remote.Code, Message: remote.Message}
 	}
 	if result != nil && !resultNull {
 		if _, isSnapshot := result.(*schema.Snapshot); isSnapshot {
 			if err := schema.ValidateWire(envelope["result"]); err != nil {
-				return fmt.Errorf("validate worker schema envelope: %w", err)
+				return nil, fmt.Errorf("validate worker schema envelope: %w", err)
 			}
 		}
-		if err := decodeStrict(envelope["result"], result); err != nil {
-			return fmt.Errorf("decode worker result: %w", err)
+		if err := decodeAfterDuplicateCheck(envelope["result"], result); err != nil {
+			return nil, fmt.Errorf("decode worker result: %w", err)
 		}
 	}
-	return nil
+	if resultNull {
+		return nil, nil
+	}
+	return envelope["result"], nil
 }
 
 type limitedBuffer struct {

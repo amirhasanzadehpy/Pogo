@@ -35,10 +35,15 @@ func newClient(connection net.Conn, requestTimeout time.Duration, hooks ...func(
 }
 
 func (client *client) Request(ctx context.Context, method string, result any) error {
+	_, err := client.request(ctx, method, result)
+	return err
+}
+
+func (client *client) request(ctx context.Context, method string, result any) ([]byte, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.poisoned {
-		return errors.New("worker connection is unavailable")
+		return nil, errors.New("worker connection is unavailable")
 	}
 	if client.onRequest != nil {
 		client.onRequest()
@@ -50,7 +55,7 @@ func (client *client) Request(ctx context.Context, method string, result any) er
 		deadline = contextDeadline
 	}
 	if err := client.connection.SetDeadline(deadline); err != nil {
-		return err
+		return nil, err
 	}
 	cancelDone := make(chan struct{})
 	stopCancellation := context.AfterFunc(ctx, func() {
@@ -72,22 +77,23 @@ func (client *client) Request(ctx context.Context, method string, result any) er
 		Params:          params,
 	}); err != nil {
 		client.poison(err)
-		return fmt.Errorf("write worker request: %w", err)
+		return nil, fmt.Errorf("write worker request: %w", err)
 	}
 	payload, err := ReadFrame(client.reader)
 	if err != nil {
 		client.poison(err)
-		return fmt.Errorf("read worker response: %w", err)
+		return nil, fmt.Errorf("read worker response: %w", err)
 	}
-	if err := decodeResponse(payload, id, result); err != nil {
+	resultPayload, err := decodeResponsePayload(payload, id, result)
+	if err != nil {
 		var remoteError *RemoteError
 		if errors.As(err, &remoteError) {
-			return err
+			return nil, err
 		}
 		client.poison(err)
-		return err
+		return nil, err
 	}
-	return nil
+	return resultPayload, nil
 }
 
 func (client *client) Close() error {

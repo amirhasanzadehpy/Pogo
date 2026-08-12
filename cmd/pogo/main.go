@@ -69,14 +69,27 @@ func run(args []string, stderr io.Writer) int {
 	}
 	defer features.Close()
 	workerLogger := commonlog.GetLogger("django-worker")
+	cacheDirectory := pogoCacheDirectory()
 	factory := func(params *protocol.InitializeParams) (lsp.Worker, error) {
 		config, enabled, err := resolveWorkerConfig(*projectRoot, *pythonPath, *settingsModule, *workerEnvironmentFile, params)
 		if err != nil || !enabled {
 			return nil, err
 		}
+		config.CacheDirectory = cacheDirectory
 		return pythonworker.NewManager(config, cache, workerLogger)
 	}
 	return lsp.RunStdioWithFactory(ctx, cancel, factory, features)
+}
+
+func pogoCacheDirectory() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	directory, err := os.UserCacheDir()
+	if err != nil || directory == "" {
+		return ""
+	}
+	return filepath.Join(directory, lsp.ServerName)
 }
 
 type initializationOptions struct {
