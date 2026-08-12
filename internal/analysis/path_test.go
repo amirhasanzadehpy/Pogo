@@ -18,6 +18,7 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 		want   []string
 	}{
 		{"deep relation", "from myapp.models import Book\nBook.objects.filter(author__na|=value)", []string{"name"}},
+		{"chained relation after dunder", "from myapp.models import Book\nBook.objects.exclude(title=\"\").exclude(author__|)", []string{"book", "café", "id", "name", "pk", "profile", "exact", "in", "isnull"}},
 		{"Unicode relation field", "from myapp.models import Book\nBook.objects.filter(author__café|=value)", []string{"café"}},
 		{"attname relation", "from myapp.models import Book\nBook.objects.filter(author_id__na|=value)", []string{"name"}},
 		{"datetime transform", "from myapp.models import Book\nBook.objects.filter(published_at__da|=value)", []string{"date"}},
@@ -45,6 +46,37 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 				t.Fatalf("candidates = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestCompleteORMPathFromEnclosingModelClassName(t *testing.T) {
+	graph := pathTestGraph(t)
+	source, offset := sourceAtCursor(t, "class Book:\n    @staticmethod\n    def update():\n        Book.objects.exclude(title=\"\").exclude(author__|)")
+	store := newTestStore(t)
+	if err := store.Open("file:///project/myapp/models.py", 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
+	context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, inferenceTestModelPath())
+	if !ok || context.Kind != ContextORMPath || context.Path == nil || context.Value.CanonicalLabel != "myapp.Book" {
+		t.Fatalf("AnalyzeSyntaxFile() = %#v, %v", context, ok)
+	}
+	candidates := CompletePath(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment)
+	if !slices.ContainsFunc(candidates, func(candidate PathCandidate) bool { return candidate.Name == "name" }) {
+		t.Fatalf("candidates = %#v, want related model fields", candidates)
+	}
+}
+
+func TestEnclosingModelClassNameDoesNotOverrideLocalBinding(t *testing.T) {
+	graph := pathTestGraph(t)
+	source, offset := sourceAtCursor(t, "class Book:\n    @staticmethod\n    def update():\n        Book = object()\n        Book.objects.exclude(author__|)")
+	store := newTestStore(t)
+	if err := store.Open("file:///project/myapp/models.py", 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
+	if context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, inferenceTestModelPath()); ok {
+		t.Fatalf("AnalyzeSyntaxFile() = %#v, want local binding to suppress model inference", context)
 	}
 }
 

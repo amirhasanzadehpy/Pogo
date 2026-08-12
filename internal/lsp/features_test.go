@@ -224,6 +224,7 @@ func TestDeepPathCompletionHoverAndCustomMethods(t *testing.T) {
 		want   []string
 	}{
 		{"lookup relation", "from myapp.models import Book\nBook.objects.filter(author__na|=value)", []string{"name"}},
+		{"chained lookup relation after dunder", "from myapp.models import Book\nBook.objects.exclude(title=\"\").exclude(author__|)", []string{"id", "name", "profile", "exact", "in", "isnull"}},
 		{"lookup transform", "from myapp.models import Book\nBook.objects.filter(published_at__date__g|=value)", []string{"gte"}},
 		{"projection", "from myapp.models import Book\nBook.objects.values(\"title\", \"author__na|\")", []string{"name"}},
 		{"only", "from myapp.models import Book\nBook.objects.only(\"author__na|\")", []string{"name"}},
@@ -299,6 +300,30 @@ func TestDeepPathCompletionHoverAndCustomMethods(t *testing.T) {
 		if err != nil || hover != nil {
 			t.Fatalf("separator Hover() = %#v, %v", hover, err)
 		}
+	}
+}
+
+func TestCompletionFromEnclosingModelClassName(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := mustSourceFileURI(t, featureTestModelPath())
+	source, position := lspSourceAtCursor(t, "class Book:\n    @staticmethod\n    def update():\n        Book.objects.exclude(title=\"\").exclude(author__|)")
+	if err := features.documents.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := features.Completion(uri, position)
+	if err != nil || completion == nil {
+		t.Fatalf("Completion() = %#v, %v", completion, err)
+	}
+	found := false
+	for _, item := range completion.Items {
+		if item.Label == "name" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("completion items = %#v, want related model fields", completion.Items)
 	}
 }
 

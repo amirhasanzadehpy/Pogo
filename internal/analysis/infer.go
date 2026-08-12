@@ -328,6 +328,13 @@ func inferExpression(expression string, sourcePrefix []byte, graph *schema.Graph
 
 func inferExpressionAtPath(expression string, sourcePrefix []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int, filePath string) Value {
 	imports, values := buildEnvironmentAtPath(sourcePrefix, graph, syntax, offset, filePath)
+	if label, name, ok := enclosingModelClass(syntax, offset, filePath, graph); ok {
+		if _, imported := imports[name]; !imported {
+			if _, bound := values[name]; !bound {
+				values[name] = Value{CanonicalLabel: label, Kind: ValueModelClass}
+			}
+		}
+	}
 	if rewritten, ok := rewriteAdminQuerySetExpression(expression); ok {
 		if label, registered := enclosingAdminModelLabel(sourcePrefix, syntax, offset, imports, graph); registered {
 			values[adminQuerySetBinding] = Value{CanonicalLabel: label, Kind: ValueQuerySet}
@@ -335,6 +342,30 @@ func inferExpressionAtPath(expression string, sourcePrefix []byte, graph *schema
 		}
 	}
 	return resolveExpression(expression, imports, values, graph)
+}
+
+func enclosingModelClass(syntax []SyntaxStatement, offset int, filePath string, graph *schema.Graph) (string, string, bool) {
+	if graph == nil || filePath == "" {
+		return "", "", false
+	}
+	var selected SyntaxStatement
+	for _, statement := range syntax {
+		if !statement.ScopeMarker || statement.ScopeKind != "class_definition" || statement.ScopeStart > offset || offset > statement.ScopeEnd {
+			continue
+		}
+		if selected.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < selected.ScopeEnd-selected.ScopeStart {
+			selected = statement
+		}
+	}
+	if selected.ScopeEnd == 0 {
+		return "", "", false
+	}
+	match := definitionBindingPattern.FindStringSubmatch(selected.Text)
+	if match == nil {
+		return "", "", false
+	}
+	label, ok := graph.CanonicalLabelForSourceClass(filePath, match[1])
+	return label, match[1], ok
 }
 
 func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int) (map[string]string, map[string]Value) {
