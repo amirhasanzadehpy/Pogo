@@ -291,6 +291,9 @@ func TestPersistentSchemaCachePermissionsAndDisabledUnavailableBehavior(t *testi
 }
 
 func TestManagerFailureRetainsProvisionalAndUsesConservativeSavePolicy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent cache is disabled on Windows")
+	}
 	project := t.TempDir()
 	source := filepath.Join(project, "installed", "models.py")
 	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
@@ -563,6 +566,9 @@ func TestSettingsSelectionIdentityHashesContentAndBoundsDiscovery(t *testing.T) 
 }
 
 func TestNewManagerDefersPersistentFilesystemWorkUntilStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent cache is disabled on Windows")
+	}
 	project := t.TempDir()
 	cachePath := filepath.Join(t.TempDir(), "cache-target")
 	if err := os.WriteFile(cachePath, nil, 0o600); err != nil {

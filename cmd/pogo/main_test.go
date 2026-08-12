@@ -15,7 +15,7 @@ import (
 
 func TestPogoCLIIdentity(t *testing.T) {
 	var stderr bytes.Buffer
-	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.2.4\n" {
+	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.2.5\n" {
 		t.Fatalf("pogo -version = code %d, output %q", exitCode, stderr.String())
 	}
 	stderr.Reset()
@@ -25,14 +25,18 @@ func TestPogoCLIIdentity(t *testing.T) {
 }
 
 func TestPogoCacheDirectoryUsesUserCache(t *testing.T) {
-	root := t.TempDir()
 	if runtime.GOOS == "windows" {
 		if directory := pogoCacheDirectory(); directory != "" {
 			t.Fatalf("pogoCacheDirectory() = %q, want disabled on Windows", directory)
 		}
 		return
-	} else {
-		t.Setenv("XDG_CACHE_HOME", root)
+	}
+	if runtime.GOOS != "darwin" {
+		t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	}
+	root, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if directory := pogoCacheDirectory(); directory != filepath.Join(root, "pogo") {
 		t.Fatalf("pogoCacheDirectory() = %q", directory)
