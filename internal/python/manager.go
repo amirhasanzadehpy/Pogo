@@ -612,6 +612,7 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	})
 	var snapshot schema.Snapshot
 	requestContext, cancelRequest := context.WithTimeout(ctx, manager.config.RequestTimeout)
+	requestStarted := time.Now()
 	err = workerClient.Request(requestContext, "schema/load", &snapshot)
 	cancelRequest()
 	if err != nil {
@@ -620,10 +621,13 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 		}
 		return false, fmt.Errorf("load Django schema: %w", err)
 	}
+	manager.info("schema phase worker_request=%s", time.Since(requestStarted))
+	buildStarted := time.Now()
 	graph, err := schema.Build(snapshot)
 	if err != nil {
 		return false, fmt.Errorf("validate Django schema: %w", err)
 	}
+	manager.info("schema phase graph_build=%s", time.Since(buildStarted))
 	generation, accepted := manager.publishGraph(ctx, graph)
 	if !accepted {
 		return false, nil

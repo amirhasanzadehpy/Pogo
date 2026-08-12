@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import weakref
 
@@ -43,6 +44,49 @@ class IntrospectionTests(unittest.TestCase):
         explicit = run_dump("--compact", "--settings", "sample_project.settings")
         self.assertEqual(explicit.returncode, 0, explicit.stderr)
         self.assertEqual(explicit.stdout, self.first.stdout)
+
+    def test_source_index_reuses_class_index_and_preserves_line_hint(self):
+        with tempfile.TemporaryDirectory(prefix="pogo-source-index-") as temporary:
+            source_path = Path(temporary) / "models.py"
+            source_path.write_text(
+                "class Duplicate:\n    first = 1\n\nclass Duplicate:\n    second = 2\n",
+                encoding="utf-8",
+            )
+            first = types.new_class("Duplicate")
+            second = types.new_class("Duplicate")
+            first.__source_line__ = 1
+            second.__source_line__ = 4
+            original_getsourcefile = introspect.inspect.getsourcefile
+            original_getsourcelines = introspect.inspect.getsourcelines
+            introspect.inspect.getsourcefile = lambda _: str(source_path)
+            introspect.inspect.getsourcelines = lambda cls: ([], cls.__source_line__)
+            try:
+                index = introspect.SourceIndex()
+                first_info = index.class_info(first)
+                second_info = index.class_info(second)
+            finally:
+                introspect.inspect.getsourcefile = original_getsourcefile
+                introspect.inspect.getsourcelines = original_getsourcelines
+
+            self.assertEqual(first_info["range"]["start"]["line"], 1)
+            self.assertEqual(second_info["range"]["start"]["line"], 4)
+            self.assertEqual(set(index._class_nodes[str(source_path.resolve())]), {"Duplicate"})
+
+    def test_node_lookups_preserve_node_precedence_over_output_field(self):
+        class OutputField:
+            def get_lookups(self):
+                return {"shared": "output", "output_only": "output"}
+
+        class Node:
+            output_field = OutputField()
+
+            def get_lookups(self):
+                return {"shared": "node", "node_only": "node"}
+
+        self.assertEqual(
+            introspect.node_lookups(Node()),
+            {"shared": "node", "output_only": "output", "node_only": "node"},
+        )
 
     def test_schema_shape_and_model_inventory(self):
         snapshot = self.snapshot
@@ -584,6 +628,21 @@ class IntrospectionTests(unittest.TestCase):
         self.assertGreater(len(payload), legacy_maximum)
         self.assertGreater(len(payload), measured_quera_schema_size)
         self.assertLess(len(payload), introspect.MAX_IPC_FRAME_SIZE)
+
+    def test_encode_message_is_compact_utf8_and_bounded(self):
+        message = {"text": "héllo <world>", "values": [1, True, None]}
+        expected = json.dumps(
+            message,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        self.assertEqual(introspect.encode_message(message), expected)
+
+        with self.assertRaises(ValueError):
+            introspect.encode_message({"value": float("nan")})
+        with self.assertRaises(introspect.FrameError):
+            introspect.encode_message({"value": "x" * introspect.MAX_IPC_FRAME_SIZE})
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix sockets are unavailable")
     def test_authenticated_worker_subprocess_hides_endpoint_environment(self):

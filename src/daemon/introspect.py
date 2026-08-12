@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import socket
 import sys
+import time
 import tokenize
 import traceback
 
@@ -40,6 +41,7 @@ def model_label(model):
 class SourceIndex:
     def __init__(self):
         self._files = {}
+        self._class_nodes = {}
         self._classes = {}
         self._digests = {}
 
@@ -56,12 +58,17 @@ class SourceIndex:
 
         path = str(Path(path).resolve())
         tree = self._parse(path)
-        try:
-            line_hint = inspect.getsourcelines(cls)[1]
-        except (OSError, TypeError):
-            line_hint = 0
-        candidates = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == cls.__name__]
-        node = min(candidates, key=lambda item: abs(item.lineno - line_hint)) if candidates else None
+        candidates = self._class_nodes[path].get(cls.__name__, ())
+        if len(candidates) == 1:
+            node = candidates[0]
+        elif candidates:
+            try:
+                line_hint = inspect.getsourcelines(cls)[1]
+            except (OSError, TypeError):
+                line_hint = 0
+            node = min(candidates, key=lambda item: abs(item.lineno - line_hint))
+        else:
+            node = None
         assignments = {}
         methods = {}
         if node is not None:
@@ -147,8 +154,16 @@ class SourceIndex:
         encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
         tree = ast.parse(source.decode(encoding), filename=path)
         self._files[path] = tree
+        class_nodes = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                class_nodes.setdefault(node.name, []).append(node)
+        self._class_nodes[path] = class_nodes
         self._digests[path] = hashlib.sha256(source).hexdigest()
         return tree
+
+    def source_paths(self):
+        return set(self._files)
 
 
 def resolve_settings(project_root, explicit_settings):
@@ -253,27 +268,11 @@ def safe_call(value, default=None):
         return default
 
 
-def registered_names(node):
+def registered_lookups(node):
     try:
-        return set(node.get_lookups())
+        return node.get_lookups()
     except (AttributeError, TypeError):
-        return set()
-
-
-def lookup_for(node, name):
-    try:
-        lookup = node.get_lookup(name)
-    except (AttributeError, TypeError):
-        lookup = None
-    if lookup is not None:
-        return lookup
-    output_field = getattr(node, "output_field", None)
-    if output_field is not None and output_field is not node:
-        try:
-            return output_field.get_lookup(name)
-        except (AttributeError, TypeError):
-            return None
-    return None
+        return {}
 
 
 def transform_for(node, name):
@@ -292,12 +291,17 @@ def transform_for(node, name):
     return None
 
 
-def node_names(node):
-    names = registered_names(node)
+def node_lookups(node):
     output_field = getattr(node, "output_field", None)
-    if output_field is not None and output_field is not node:
-        names.update(registered_names(output_field))
-    return names
+    lookups = registered_lookups(output_field) if output_field is not None and output_field is not node else {}
+    own_lookups = registered_lookups(node)
+    if not lookups:
+        return own_lookups
+    if not own_lookups:
+        return lookups
+    lookups = dict(lookups)
+    lookups.update(own_lookups)
+    return lookups
 
 
 def unsupported_lookup_names(node, connection):
@@ -309,17 +313,25 @@ def unsupported_lookup_names(node, connection):
     return set()
 
 
-def terminal_lookups(node, connection):
+def classified_names(node, connection):
+    from django.db.models.lookups import Lookup, Transform
+
     unsupported = unsupported_lookup_names(node, connection)
-    return sorted(name for name in node_names(node) if name not in unsupported and lookup_for(node, name) is not None)
-
-
-def fixed_transforms(node):
-    return sorted(
-        name
-        for name in node_names(node)
-        if lookup_for(node, name) is None and transform_for(node, name) is not None
-    )
+    lookups = []
+    transforms = []
+    for name, candidate in sorted(node_lookups(node).items()):
+        if name in unsupported:
+            continue
+        try:
+            is_lookup = issubclass(candidate, Lookup)
+            is_transform = issubclass(candidate, Transform)
+        except TypeError:
+            continue
+        if is_lookup:
+            lookups.append(name)
+        elif is_transform:
+            transforms.append(name)
+    return lookups, transforms
 
 
 def build_lookup_paths(field, connection):
@@ -332,31 +344,34 @@ def build_lookup_paths(field, connection):
     except (TypeError, ValueError):
         expression = field
     queue = [((), (), expression)]
+    queue_index = 0
     seen = set()
     truncated = False
-    while queue and len(paths) < MAX_LOOKUP_PATHS:
-        transforms, kinds, node = queue.pop(0)
+    while queue_index < len(queue) and len(paths) < MAX_LOOKUP_PATHS:
+        transforms, kinds, node = queue[queue_index]
+        queue_index += 1
         key = (transforms, kinds)
         if key in seen:
             continue
         seen.add(key)
+        lookups, fixed = classified_names(node, connection)
         paths.append(
             {
                 "transforms": list(transforms),
                 "kinds": list(kinds),
-                "lookups": terminal_lookups(node, connection),
+                "lookups": lookups,
             }
         )
         if len(transforms) >= LOOKUP_TRANSFORM_MAX_DEPTH:
             continue
-        for name in fixed_transforms(node):
+        for name in fixed:
             factory = transform_for(node, name)
             try:
                 child = factory(node)
                 getattr(child, "output_field", None)
             except Exception:
                 continue
-            if len(seen) + len(queue) + len(paths) >= MAX_LOOKUP_PATHS:
+            if len(seen) + len(queue) - queue_index + len(paths) >= MAX_LOOKUP_PATHS:
                 truncated = True
                 break
             queue.append((transforms + (name,), kinds + ("transform",), child))
@@ -369,12 +384,12 @@ def build_lookup_paths(field, connection):
             except Exception:
                 child = None
             if child is not None:
-                if len(seen) + len(queue) + len(paths) >= MAX_LOOKUP_PATHS:
+                if len(seen) + len(queue) - queue_index + len(paths) >= MAX_LOOKUP_PATHS:
                     truncated = True
                 else:
                     queue.append((transforms + ("*",), kinds + ("key_transform",), child))
 
-    if queue:
+    if queue_index < len(queue):
         truncated = True
     paths.sort(key=lambda item: (len(item["transforms"]), item["transforms"], item["kinds"]))
     return paths, truncated
@@ -427,7 +442,8 @@ def serialize_field(field, current_model, source_index, connection):
         internal_type = safe_call(internal_method, type(field).__name__) if callable(internal_method) else type(field).__name__
 
     unsupported = unsupported_lookup_names(field, connection)
-    names = sorted(name for name in registered_names(field) if name not in unsupported)
+    names = sorted(name for name in registered_lookups(field) if name not in unsupported)
+    _, field_transforms = classified_names(field, connection)
     lookup_paths, lookup_paths_truncated = build_lookup_paths(field, connection)
     return {
         "type": class_path(field),
@@ -457,7 +473,7 @@ def serialize_field(field, current_model, source_index, connection):
         "source_model_abstract": bool(source_owner._meta.abstract),
         "source_range": source_range,
         "parent_link": parent_link,
-        "transforms": sorted(name for name in names if lookup_for(field, name) is None and transform_for(field, name) is not None),
+        "transforms": field_transforms,
         "lookup_paths": lookup_paths,
         "lookup_paths_truncated": lookup_paths_truncated,
     }
@@ -799,8 +815,9 @@ def build_snapshot(project_root, settings_name):
 
     settings_module = importlib.import_module(settings_name)
     settings_path = inspect.getsourcefile(settings_module)
-    sources = {str(Path(settings_path).resolve())} if settings_path else set()
-    collect_source_paths(app_models, sources)
+    sources = source_index.source_paths()
+    if settings_path:
+        sources.add(str(Path(settings_path).resolve()))
     root = Path(project_root).resolve()
     project_sources = sorted(path for path in sources if Path(path).is_relative_to(root))
 
@@ -817,20 +834,6 @@ def build_snapshot(project_root, settings_name):
         "schema_sources": project_sources,
         "apps": ordered_apps,
     }
-
-
-def collect_source_paths(value, paths):
-    if isinstance(value, dict):
-        file_path = value.get("file_path")
-        if isinstance(file_path, str):
-            paths.add(str(Path(file_path).resolve()))
-        for child in value.values():
-            collect_source_paths(child, paths)
-    elif isinstance(value, list):
-        for child in value:
-            collect_source_paths(child, paths)
-
-
 class FrameError(Exception):
     pass
 
@@ -876,16 +879,12 @@ def encode_message(message):
         allow_nan=False,
         separators=(",", ":"),
     )
-    payload = bytearray()
-    for chunk in encoder.iterencode(message):
-        encoded = chunk.encode("utf-8")
-        if len(payload) + len(encoded) > MAX_IPC_FRAME_SIZE:
-            raise FrameError("IPC frame exceeds maximum size")
-        payload.extend(encoded)
+    payload = encoder.encode(message).encode("utf-8")
     if not payload:
         raise FrameError("empty IPC frame")
-    payload.append(ord("\n"))
-    return bytes(payload)
+    if len(payload) > MAX_IPC_FRAME_SIZE:
+        raise FrameError("IPC frame exceeds maximum size")
+    return payload + b"\n"
 
 
 def write_message(connection, message):
@@ -959,16 +958,24 @@ def error_response(request_id, code, message):
 
 
 class WorkerState:
-    def __init__(self, project, settings_name):
+    def __init__(self, project, settings_name, log_timings=False):
         self.project = project
         self.settings_name = settings_name
+        self.log_timings = log_timings
         self.project_root = None
         self.resolved_settings = None
 
     def dump_schema(self):
         if self.project_root is None:
+            started = time.perf_counter()
             self.project_root, self.resolved_settings = bootstrap(self.project, self.settings_name)
-        return build_snapshot(self.project_root, self.resolved_settings)
+            if self.log_timings:
+                print(f"pogo phase django_setup={time.perf_counter() - started:.3f}s", file=sys.stderr)
+        started = time.perf_counter()
+        snapshot = build_snapshot(self.project_root, self.resolved_settings)
+        if self.log_timings:
+            print(f"pogo phase python_snapshot={time.perf_counter() - started:.3f}s", file=sys.stderr)
+        return snapshot
 
 
 def dispatch_request(request, worker_state):
@@ -992,7 +999,7 @@ def dispatch_request(request, worker_state):
 def serve_connection(connection, project, settings_name, worker_state=None):
     reader = FrameReader(connection)
     if worker_state is None:
-        worker_state = WorkerState(project, settings_name)
+        worker_state = WorkerState(project, settings_name, log_timings=True)
     while True:
         payload = reader.read()
         if payload is None:

@@ -33,6 +33,7 @@ go.work.sum
 
 # Local agent plans
 /.codera/plans/
+/STARTUP_OPTIMIZATION_NOTES.md
 
 # Local builds and profiles
 /bin/
