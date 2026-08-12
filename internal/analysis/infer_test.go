@@ -53,6 +53,8 @@ func TestAnalyzeModelAndInstanceMembers(t *testing.T) {
 		{"spaced constructor", "from myapp.models import Book\nbook = Book ()\nbook.au|", ContextInstanceMember},
 		{"parenthesis string return", "from myapp.models import Book\nbook = Book.objects.get (title=\"(\")\nbook.au|", ContextInstanceMember},
 		{"Unicode field", "from myapp.models import Book\nbook = Book()\nbook.café|", ContextInstanceMember},
+		{"Django shortcut result", "from django.shortcuts import get_object_or_404\nfrom myapp.models import Book\nbook = get_object_or_404(Book, id=1)\nbook.au|", ContextInstanceMember},
+		{"reverse related manager result", "from django.shortcuts import get_object_or_404\nfrom myapp.models import Book\nbook = get_object_or_404(Book, id=1)\nbook.author.books.filter(ti|)", ContextQueryKeyword},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -76,6 +78,7 @@ func TestAnalyzeRejectsUnknownAndInvalidContexts(t *testing.T) {
 		"from myapp.models import Book\nbook = Book + 1\nbook.au|",
 		"from myapp.models import Book\nbooks: list[Book]\nbooks.filter(au|)",
 		"from myapp.models import Book\ntext = \"Book.objects.filter(author|)\"",
+		"from myapp.models import Book\ndef get_object_or_404(*args): ...\nbook = get_object_or_404(Book, id=1)\nbook.au|",
 		"from myapp.models import Book\n# Book.objects.filter(author|)",
 	} {
 		source, offset := sourceAtCursor(t, sourceWithCursor)
@@ -146,7 +149,6 @@ func TestAnalyzeSyntaxFileTraversesSingleValuedRelationsFromModelSelf(t *testing
 func TestAnalyzeSyntaxFileDoesNotTreatRelatedManagersAsInstances(t *testing.T) {
 	graph := inferenceTestGraph(t)
 	for _, sourceWithCursor := range []string{
-		"class Author:\n    def title(self):\n        return self.books.ti|",
 		"class Book:\n    def invalid(self):\n        self = object()\n        return self.author.na|",
 		"class Book:\n    def invalid(other, self):\n        return self.author.na|",
 		"class Book:\n    @staticmethod\n    def invalid(self):\n        return self.author.na|",
@@ -161,6 +163,20 @@ func TestAnalyzeSyntaxFileDoesNotTreatRelatedManagersAsInstances(t *testing.T) {
 		if context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, inferenceTestModelPath()); ok {
 			t.Fatalf("unsafe relation inference = %#v", context)
 		}
+	}
+}
+
+func TestAnalyzeSyntaxFileTreatsToManyRelationsAsManagers(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	store := newTestStore(t)
+	source, offset := sourceAtCursor(t, "class Author:\n    def titles(self):\n        return self.books.filter(ti|=value)")
+	if err := store.Open("file:///project/myapp/models.py", 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot("file:///project/myapp/models.py")
+	context, ok := AnalyzeSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, inferenceTestModelPath())
+	if !ok || context.Kind != ContextQueryKeyword || context.Value.CanonicalLabel != "myapp.Book" {
+		t.Fatalf("AnalyzeSyntaxFile() = %#v, %v", context, ok)
 	}
 }
 

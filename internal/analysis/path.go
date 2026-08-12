@@ -107,7 +107,10 @@ type PathIssue struct {
 func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
 	call, ok := enclosingCall(source, offset)
 	if !ok {
-		return Context{}, false
+		if context, qPath := analyzeQPathContext(source, offset, graph, syntax, filePath); qPath {
+			return context, true
+		}
+		return analyzeExpressionPathContext(source, offset, graph, syntax, filePath)
 	}
 	mode, stringPath, ok := pathMethod(call.method)
 	if !ok {
@@ -146,9 +149,93 @@ func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax [
 	return Context{Kind: ContextORMPath, Value: value, Identifier: segments[active].Text, Replacement: path.Replacement, Path: path}, true
 }
 
+func analyzeExpressionPathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
+	expression, ok := enclosingFunctionCall(source, offset)
+	if !ok {
+		return Context{}, false
+	}
+	imports, _ := buildEnvironmentAtPath(source[:offset], graph, syntax, offset, filePath)
+	if !strings.HasPrefix(expandImport(expression.name, imports), "django.db.models.functions.") {
+		return Context{}, false
+	}
+	call, ok := enclosingCallBefore(source, offset, expression.opening)
+	if !ok || call.method != "annotate" && call.method != "alias" && call.method != "aggregate" {
+		return Context{}, false
+	}
+	value := inferExpressionAtPath(strings.TrimSpace(string(source[call.receiver.Start:call.receiver.End])), source[:offset], graph, syntax, offset, filePath)
+	if value.Kind != ValueManager && value.Kind != ValueQuerySet {
+		return Context{}, false
+	}
+	argument := activeArgument(source, expression.argumentsStart, offset)
+	pathRange, ok := stringPathRange(source, argument, offset)
+	if !ok || pathRange.End-pathRange.Start > MaxPathBytes {
+		return Context{}, false
+	}
+	segments, active, onSeparator, ok := splitPath(source, pathRange, offset)
+	if !ok || len(segments) > MaxPathSegments {
+		return Context{}, false
+	}
+	path := &PathContext{
+		Method: call.method, Mode: PathProjection, Segments: segments, ActiveSegment: active,
+		Replacement: segments[active].Range, Arguments: ByteRange{Start: expression.argumentsStart, End: offset}, ActiveArgument: argument.index,
+		OnSeparator: onSeparator,
+	}
+	return Context{Kind: ContextORMPath, Value: value, Identifier: segments[active].Text, Replacement: path.Replacement, Path: path}, true
+}
+
+func analyzeQPathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
+	qCall, ok := enclosingFunctionCall(source, offset)
+	if !ok {
+		return Context{}, false
+	}
+	imports, _ := buildEnvironmentAtPath(source[:offset], graph, syntax, offset, filePath)
+	if expandImport(qCall.name, imports) != "django.db.models.Q" {
+		return Context{}, false
+	}
+	call, ok := enclosingCallBefore(source, offset, qCall.opening)
+	if !ok {
+		return Context{}, false
+	}
+	mode, stringPath, ok := pathMethod(call.method)
+	if !ok || stringPath {
+		return Context{}, false
+	}
+	value := inferExpressionAtPath(strings.TrimSpace(string(source[call.receiver.Start:call.receiver.End])), source[:offset], graph, syntax, offset, filePath)
+	if value.Kind != ValueManager && value.Kind != ValueQuerySet {
+		return Context{}, false
+	}
+	if _, overridden := ResolveMethod(graph, value, call.method); overridden {
+		return Context{}, false
+	}
+	argument := activeArgument(source, qCall.argumentsStart, offset)
+	pathRange, ok := keywordPathRange(source, argument, offset)
+	if !ok || pathRange.End-pathRange.Start > MaxPathBytes {
+		return Context{}, false
+	}
+	segments, active, onSeparator, ok := splitPath(source, pathRange, offset)
+	if !ok || len(segments) > MaxPathSegments {
+		return Context{}, false
+	}
+	path := &PathContext{
+		Method: call.method, Mode: mode, Segments: segments, ActiveSegment: active,
+		Replacement: segments[active].Range, Arguments: ByteRange{Start: qCall.argumentsStart, End: offset}, ActiveArgument: argument.index,
+		OnSeparator: onSeparator,
+	}
+	if len(segments) == 1 {
+		return Context{Kind: ContextQueryKeyword, Value: value, Identifier: segments[0].Text, Replacement: path.Replacement}, true
+	}
+	return Context{Kind: ContextORMPath, Value: value, Identifier: segments[active].Text, Replacement: path.Replacement, Path: path}, true
+}
+
 type callContext struct {
 	method         string
 	receiver       ByteRange
+	argumentsStart int
+}
+
+type functionCallContext struct {
+	name           string
+	opening        int
 	argumentsStart int
 }
 
@@ -174,7 +261,41 @@ func enclosingCall(source []byte, offset int) (callContext, bool) {
 	if len(stack) == 0 {
 		return callContext{}, false
 	}
-	opening := stack[len(stack)-1]
+	return callAfterOpening(source, stack[len(stack)-1])
+}
+
+func enclosingCallBefore(source []byte, offset, opening int) (callContext, bool) {
+	if offset < 0 || offset > len(source) {
+		return callContext{}, false
+	}
+	code := pythonCodeMask(source, offset)
+	stack := make([]int, 0, 8)
+	for index := 0; index < offset; index++ {
+		if !code[index] {
+			continue
+		}
+		switch source[index] {
+		case '(':
+			stack = append(stack, index)
+		case ')':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	for index := len(stack) - 1; index >= 0; index-- {
+		if stack[index] >= opening {
+			continue
+		}
+		if call, ok := callAfterOpening(source, stack[index]); ok {
+			return call, true
+		}
+	}
+	return callContext{}, false
+}
+
+func callAfterOpening(source []byte, opening int) (callContext, bool) {
+	code := pythonCodeMask(source, opening)
 	nameEnd := opening
 	for nameEnd > 0 && isSpace(source[nameEnd-1]) {
 		nameEnd--
@@ -191,6 +312,43 @@ func enclosingCall(source []byte, offset int) (callContext, bool) {
 		return callContext{}, false
 	}
 	return callContext{method: string(source[nameStart:nameEnd]), receiver: receiver, argumentsStart: opening + 1}, true
+}
+
+func enclosingFunctionCall(source []byte, offset int) (functionCallContext, bool) {
+	if offset < 0 || offset > len(source) {
+		return functionCallContext{}, false
+	}
+	code := pythonCodeMask(source, offset)
+	stack := make([]int, 0, 8)
+	for index := 0; index < offset; index++ {
+		if !code[index] {
+			continue
+		}
+		switch source[index] {
+		case '(':
+			stack = append(stack, index)
+		case ')':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	if len(stack) == 0 {
+		return functionCallContext{}, false
+	}
+	opening := stack[len(stack)-1]
+	nameEnd := opening
+	for nameEnd > 0 && isSpace(source[nameEnd-1]) {
+		nameEnd--
+	}
+	nameStart := nameEnd
+	for nameStart > 0 && isIdentifierByte(source[nameStart-1]) && code[nameStart-1] {
+		nameStart--
+	}
+	if nameStart == nameEnd || nameStart > 0 && source[nameStart-1] == '.' {
+		return functionCallContext{}, false
+	}
+	return functionCallContext{name: string(source[nameStart:nameEnd]), opening: opening, argumentsStart: opening + 1}, true
 }
 
 type argumentContext struct {

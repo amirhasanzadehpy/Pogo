@@ -486,6 +486,8 @@ func buildEnvironmentAtPath(source []byte, graph *schema.Graph, syntax []SyntaxS
 				if label, ok := enclosingModelLabel(syntax, offset, filePath, graph); ok {
 					value = Value{CanonicalLabel: label, Kind: ValueModelInstance}
 				}
+			} else if shortcut, ok := djangoShortcutValue(match[2], imports, graph); ok {
+				value = shortcut
 			} else {
 				value = resolveExpression(match[2], imports, values, graph)
 			}
@@ -506,6 +508,62 @@ func buildEnvironmentAtPath(source []byte, graph *schema.Graph, syntax []SyntaxS
 		delete(values, name)
 	}
 	return imports, values
+}
+
+func djangoShortcutValue(expression string, imports map[string]string, graph *schema.Graph) (Value, bool) {
+	expression = strings.TrimSpace(expression)
+	opening := strings.IndexByte(expression, '(')
+	if opening <= 0 || len(expression) > MaxPathBytes {
+		return Value{}, false
+	}
+	function := strings.TrimSpace(expression[:opening])
+	if !identifierText(strings.ReplaceAll(function, ".", "")) || expandImport(function, imports) != "django.shortcuts.get_object_or_404" {
+		return Value{}, false
+	}
+	end, ok := skipCall(expression, opening)
+	if !ok || strings.TrimSpace(expression[end:]) != "" {
+		return Value{}, false
+	}
+	argument := firstCallArgument(expression[opening+1 : end-1])
+	label, ok := resolveClass(strings.TrimSpace(argument), imports, graph)
+	if !ok {
+		return Value{}, false
+	}
+	return Value{CanonicalLabel: label, Kind: ValueModelInstance}, true
+}
+
+func firstCallArgument(arguments string) string {
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := 0; index < len(arguments); index++ {
+		value := arguments[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch value {
+		case '\'', '"':
+			quote = value
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				return arguments[:index]
+			}
+		}
+	}
+	return arguments
 }
 
 func enclosingModelLabel(syntax []SyntaxStatement, offset int, filePath string, graph *schema.Graph) (string, bool) {
@@ -923,7 +981,7 @@ func resolveExpression(expression string, imports map[string]string, values map[
 				value.Kind = ValueModelInstance
 				value.ManagerName = ""
 				value.QuerySetClass = ""
-			case "all", "filter", "exclude", "order_by", "values", "values_list", "only", "defer", "select_related", "prefetch_related":
+			case "all", "filter", "exclude", "annotate", "alias", "distinct", "order_by", "values", "values_list", "only", "defer", "select_related", "prefetch_related":
 				if value.Kind == ValueManager {
 					value.ManagerName = ""
 				}
@@ -939,16 +997,31 @@ func resolveExpression(expression string, imports map[string]string, values map[
 			if !ok || access.Field == nil {
 				return Value{}
 			}
-			label, ok := singleRelatedInstance(access.Field)
+			if label, ok := singleRelatedInstance(access.Field); ok {
+				value = Value{CanonicalLabel: label, Kind: ValueModelInstance}
+				break
+			}
+			label, ok := relatedManagerModel(access.Field)
 			if !ok {
 				return Value{}
 			}
-			value = Value{CanonicalLabel: label, Kind: ValueModelInstance}
+			value = Value{CanonicalLabel: label, Kind: ValueManager}
 		default:
 			return Value{}
 		}
 	}
 	return value
+}
+
+func relatedManagerModel(field *schema.FieldRef) (string, bool) {
+	if field == nil || !field.IsRelation() {
+		return "", false
+	}
+	cardinality, ok := field.RelationCardinality()
+	if !ok || cardinality != schema.RelationOneToMany && cardinality != schema.RelationManyToMany {
+		return "", false
+	}
+	return field.RelatedModel()
 }
 
 func singleRelatedInstance(field *schema.FieldRef) (string, bool) {

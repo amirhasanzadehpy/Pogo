@@ -68,6 +68,41 @@ func TestBuildIndexesAndRejectsDanglingRelations(t *testing.T) {
 	}
 }
 
+func TestBuildIndexesUniqueModelPackageExports(t *testing.T) {
+	snapshot := syntheticSnapshot(2)
+	model := snapshot.Apps["app"].Models["Model1"]
+	model.Module = "app.models.nested"
+	snapshot.Apps["app"].Models["Model1"] = model
+	graph, err := Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label, ok := graph.CanonicalLabelForClass("app.models.Model1"); !ok || label != "app.Model1" {
+		t.Fatalf("model package export = %q, %v", label, ok)
+	}
+
+	duplicate := model
+	duplicate.CanonicalLabel = "other.Model1"
+	duplicate.Module = "app.models.other"
+	duplicate.FilePath = syntheticPath("other_models.py")
+	duplicate.LineNumber = 10
+	duplicate.SourceRange = testRange(10)
+	duplicate.SourceRange.FilePath = duplicate.FilePath
+	for name, field := range duplicate.Fields {
+		field.SourceModel = duplicate.CanonicalLabel
+		field.RelatedModel = &duplicate.CanonicalLabel
+		duplicate.Fields[name] = field
+	}
+	snapshot.Apps["other"] = App{Label: "other", ImportName: "app", RootPath: filepath.Dir(duplicate.FilePath), Models: map[string]Model{"Model1": duplicate}}
+	graph, err = Build(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label, ok := graph.CanonicalLabelForClass("app.models.Model1"); ok {
+		t.Fatalf("ambiguous model package export resolved to %q", label)
+	}
+}
+
 func TestCacheConcurrentReadersObserveCompleteGenerations(t *testing.T) {
 	cache := &Cache{}
 	const replacements = 100

@@ -18,6 +18,10 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 		want   []string
 	}{
 		{"deep relation", "from myapp.models import Book\nBook.objects.filter(author__na|=value)", []string{"name"}},
+		{"Q relation", "from django.db.models import Q\nfrom myapp.models import Book\nBook.objects.filter(Q(author__na|=value))", []string{"name"}},
+		{"Q relation after annotate", "from django.db.models import Count, Q\nfrom myapp.models import Book\nBook.objects.annotate(total=Count(\"id\")).filter(Q(author__na|=value))", []string{"name"}},
+		{"function expression relation", "from django.db.models.functions import Concat\nfrom myapp.models import Book\nBook.objects.annotate(label=Concat(\"author__na|\"))", []string{"name"}},
+		{"aliased Q relation", "from django.db.models import Q as Where\nfrom myapp.models import Book\nBook.objects.filter(Where(author__na|=value))", []string{"name"}},
 		{"chained relation after dunder", "from myapp.models import Book\nBook.objects.exclude(title=\"\").exclude(author__|)", []string{"book", "café", "id", "name", "pk", "profile", "exact", "in", "isnull"}},
 		{"Unicode relation field", "from myapp.models import Book\nBook.objects.filter(author__café|=value)", []string{"café"}},
 		{"attname relation", "from myapp.models import Book\nBook.objects.filter(author_id__na|=value)", []string{"name"}},
@@ -27,8 +31,13 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 		{"projection transform", "from myapp.models import Book\nBook.objects.values(\"published_at__da|\")", []string{"date"}},
 		{"field mask", "from myapp.models import Book\nBook.objects.only(\"author__na|\")", []string{"name"}},
 		{"select related", "from myapp.models import Book\nBook.objects.select_related(\"author__pro|\")", []string{"profile"}},
+		{"annotated queryset select related", "from django.db.models import QuerySet\nfrom myapp.models import Book\nitems: QuerySet[Book] = get_items()\nitems.select_related(\"author__pro|\")", []string{"profile"}},
+		{"annotated queryset prefetch related", "from django.db.models import QuerySet\nfrom myapp.models import Book\nitems: QuerySet[Book] = get_items()\nitems.prefetch_related(\"author__bo|\")", []string{"books"}},
 		{"prefetch accessor", "from myapp.models import Book\nBook.objects.prefetch_related(\"sto|\")", []string{"store_set"}},
 		{"recursive self relation", "from myapp.models import Node\nNode.objects.filter(parent__parent__na|=value)", []string{"name"}},
+		{"shortcut reverse manager Q relation", "from django.db.models import Q\nfrom django.shortcuts import get_object_or_404\nfrom myapp.models import Book\nbook = get_object_or_404(Book, id=1)\nbook.author.books.filter(Q(author__na|=value))", []string{"name"}},
+		{"many-to-many through lookup", "from myapp.models import Company\ncompany: Company = request.company\ncompany.members.filter(companymembership__ro|=value)", []string{"role"}},
+		{"many-to-many through lookup suffix", "from myapp.models import Company\ncompany: Company = request.company\ncompany.members.filter(companymembership__role__i|=value)", []string{"in"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -44,6 +53,41 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 			}
 			if !slices.Equal(got, test.want) {
 				t.Fatalf("candidates = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDjangoExpressionValueStringIsNotAFieldPath(t *testing.T) {
+	graph := pathTestGraph(t)
+	source, offset := sourceAtCursor(t, "from django.db.models import Value\nfrom django.db.models.functions import Concat\nfrom myapp.models import Book\nBook.objects.annotate(label=Concat(\"author__name\", Value(\"lit|eral\")))")
+	if context, ok := Analyze(source, offset, graph); ok {
+		t.Fatalf("Analyze() = %#v, want Value string to remain literal", context)
+	}
+}
+
+func TestAnalyzeNestedQORMPath(t *testing.T) {
+	graph := pathTestGraph(t)
+	source := []byte("from django.db.models import Avg, Count, Q, Value\nfrom myapp.models import Book\nBook.objects.filter(Q(id__in=ids) | Q(author__name__icontains=value))")
+	for _, test := range []struct {
+		path string
+		want string
+	}{
+		{path: "id__", want: "in"},
+		{path: "id__in", want: "in"},
+		{path: "author__", want: "name"},
+		{path: "author__name__", want: "icontains"},
+		{path: "author__name__icontains", want: "icontains"},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			offset := strings.Index(string(source), test.path) + len(test.path)
+			context, ok := Analyze(source, offset, graph)
+			if !ok || context.Path == nil {
+				t.Fatalf("Analyze() = %#v, %v", context, ok)
+			}
+			candidates := CompletePath(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment)
+			if !slices.ContainsFunc(candidates, func(candidate PathCandidate) bool { return candidate.Name == test.want }) {
+				t.Fatalf("candidates = %#v, want %q", candidates, test.want)
 			}
 		})
 	}
@@ -327,7 +371,9 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	forward, reverse := "forward", "reverse"
 	manyToOne, oneToMany, oneToOne, manyToMany := "many-to-one", "one-to-many", "one-to-one", "many-to-many"
 	bookLabel, authorLabel, profileLabel, storeLabel, nodeLabel := "myapp.Book", "myapp.Author", "myapp.Profile", "myapp.Store", "myapp.Node"
+	userLabel, membershipLabel := "myapp.User", "myapp.CompanyMembership"
 	books, book, profile, store, storeSet := "books", "book", "profile", "store", "store_set"
+	companyMembership, companyMembershipSet := "companymembership", "companymembership_set"
 	authorID := "author_id"
 	querySetClass := "myapp.models.BookQuerySet"
 	activeSignature := "(status: str = 'active')"
@@ -359,7 +405,23 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 			"name":   testField("myapp.Node", "name", "django.db.models.fields.CharField"),
 			"parent": relationField("myapp.Node", "parent", nodeLabel, forward, manyToOne, nil, nil),
 		}),
+		"Company": testModel("Company", map[string]schema.Field{
+			"members": relationField("myapp.Company", "members", userLabel, forward, manyToMany, nil, nil),
+		}),
+		"User": testModel("User", map[string]schema.Field{
+			"companymembership": relationField("myapp.CompanyMembership", "companymembership", membershipLabel, reverse, oneToMany, &companyMembership, &companyMembershipSet),
+		}),
+		"CompanyMembership": testModel("CompanyMembership", map[string]schema.Field{
+			"role": func() schema.Field {
+				field := testField("myapp.CompanyMembership", "role", "django.db.models.fields.CharField")
+				field.LookupPaths = []schema.LookupPath{{Lookups: []string{"exact", "in"}}}
+				return field
+			}(),
+		}),
 	}
+	company := models["Company"]
+	company.Module = "myapp.models.companies"
+	models["Company"] = company
 	title := testField("myapp.Book", "title", "django.db.models.fields.CharField")
 	title.LookupPaths = []schema.LookupPath{{Lookups: []string{"exact", "icontains"}}}
 	title.UnsupportedLookups = []string{"contains"}
@@ -381,6 +443,7 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	bookPrimaryKey := testField("myapp.Book", "id", "django.db.models.fields.BigAutoField")
 	bookPrimaryKey.PrimaryKey = true
 	bookPrimaryKey.EffectivePrimaryKey = true
+	bookPrimaryKey.LookupPaths = []schema.LookupPath{{Lookups: []string{"exact", "in", "isnull"}}}
 	bookModel := testModel("Book", map[string]schema.Field{
 		"id": bookPrimaryKey, "title": title, "published_at": published, "metadata": metadata, "author": author, "store": storeRelation,
 	})

@@ -30,6 +30,7 @@ type Graph struct {
 	snapshot    Snapshot
 	canonical   map[string]*modelIndex
 	classPath   map[string]*modelIndex
+	modelExport map[string]*modelIndex
 	sourceClass map[string]*modelIndex
 	module      map[string][]*modelIndex
 }
@@ -151,6 +152,7 @@ func Build(snapshot Snapshot) (*Graph, error) {
 		snapshot:    snapshot,
 		canonical:   make(map[string]*modelIndex),
 		classPath:   make(map[string]*modelIndex),
+		modelExport: make(map[string]*modelIndex),
 		sourceClass: make(map[string]*modelIndex),
 		module:      make(map[string][]*modelIndex),
 	}
@@ -175,6 +177,14 @@ func Build(snapshot Snapshot) (*Graph, error) {
 			}
 			graph.canonical[model.CanonicalLabel] = index
 			graph.classPath[classPath] = index
+			if !strings.Contains(model.Qualname, ".") && (model.Module == app.ImportName+".models" || strings.HasPrefix(model.Module, app.ImportName+".models.")) {
+				exportPath := app.ImportName + ".models." + model.Qualname
+				if existing, exists := graph.modelExport[exportPath]; exists && existing != index {
+					graph.modelExport[exportPath] = nil
+				} else if !exists {
+					graph.modelExport[exportPath] = index
+				}
+			}
 			sourcePaths := []string{model.FilePath}
 			if resolved := resolvedPath(model.FilePath); !samePath(filepath.Clean(model.FilePath), resolved) {
 				sourcePaths = append(sourcePaths, resolved)
@@ -738,6 +748,9 @@ func (graph *Graph) CanonicalLabelForClass(classPath string) (string, bool) {
 		return "", false
 	}
 	index := graph.classPath[classPath]
+	if index == nil {
+		index = graph.modelExport[classPath]
+	}
 	if index == nil {
 		return "", false
 	}

@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml"><img src="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.2.6"><img src="https://img.shields.io/badge/release-v0.2.6-56e39f?style=flat-square" alt="Release v0.2.6"></a>
+  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.2.7"><img src="https://img.shields.io/badge/release-v0.2.7-56e39f?style=flat-square" alt="Release v0.2.7"></a>
   <img src="https://img.shields.io/badge/Go-1.22%2B-42b7ff?style=flat-square" alt="Go 1.22 or newer">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square" alt="Python 3.10 through 3.13">
   <img src="https://img.shields.io/badge/Django-4.2%20%7C%205.2-0c4b33?style=flat-square" alt="Django 4.2 and 5.2">
@@ -51,8 +51,8 @@ Python tool, not replace it.
 
 | Capability | Django-aware behavior |
 | --- | --- |
-| **Completion** | Fields, foreign-key attnames, relations, reverse names, lookups, transforms, managers, and custom `QuerySet` methods |
-| **ORM paths** | `filter`, `exclude`, `get`, `values`, `values_list`, `only`, `defer`, `select_related`, and `prefetch_related` |
+| **Completion** | Fields, foreign-key attnames, relations, reverse names, related managers, lookups, transforms, managers, and custom `QuerySet` methods |
+| **ORM paths** | `filter`, `exclude`, `get`, `Q(...)`, expression field strings, `values`, `values_list`, `only`, `defer`, `select_related`, and `prefetch_related` |
 | **Hover** | Django field class, database type and column, nullability, `db_index`, uniqueness, relation targets, and field help text |
 | **Signature help** | Cached signatures and docstrings for custom manager and `QuerySet` methods |
 | **Diagnostics** | Exact invalid path segments, non-relation traversal, invalid lookups, projections, and `select_related` targets |
@@ -110,11 +110,11 @@ server for supported Linux, macOS, and Windows extension hosts on amd64/arm64.
 
 ### VS Code
 
-Download `pogo-0.2.6.vsix` from
+Download `pogo-0.2.7.vsix` from
 [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases), then run:
 
 ```sh
-code --install-extension "$HOME/Downloads/pogo-0.2.6.vsix"
+code --install-extension "$HOME/Downloads/pogo-0.2.7.vsix"
 ```
 
 You can also run **Extensions: Install from VSIX...** from the command palette.
@@ -134,7 +134,7 @@ The commands below use common architectures as examples. Replace `amd64` with
 Linux and macOS archives contain one `pogo` executable:
 
 ```sh
-tar -xzf pogo-v0.2.6-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
+tar -xzf pogo-v0.2.7-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
 mkdir -p "$HOME/.local/bin"
 install -m 0755 pogo "$HOME/.local/bin/pogo"
 export PATH="$HOME/.local/bin:$PATH"
@@ -150,7 +150,7 @@ The example uses `windows-amd64`; substitute `windows-arm64` in both commands on
 Windows on Arm.
 
 ```powershell
-Expand-Archive .\pogo-v0.2.6-windows-amd64.zip -DestinationPath .\pogo
+Expand-Archive .\pogo-v0.2.7-windows-amd64.zip -DestinationPath .\pogo
 $PogoBin = Join-Path $HOME ".local\bin"
 New-Item -ItemType Directory -Force $PogoBin | Out-Null
 Copy-Item .\pogo\pogo.exe "$PogoBin\pogo.exe"
@@ -170,20 +170,20 @@ This repository is private, so authenticate `gh` before downloading:
 
 ```sh
 gh auth login
-gh release download v0.2.6 \
+gh release download v0.2.7 \
   --repo amirhasanzadehpy/Pogo \
-  --pattern 'pogo-v0.2.6-linux-amd64.tar.gz' \
+  --pattern 'pogo-v0.2.7-linux-amd64.tar.gz' \
   --pattern checksums.txt
 sha256sum --check --ignore-missing checksums.txt
 ```
 
 Change the `--pattern` target to match your OS and CPU. On macOS, download the
 matching `darwin` archive and calculate its digest with
-`shasum -a 256 pogo-v0.2.6-darwin-arm64.tar.gz` and compare it with the matching
+`shasum -a 256 pogo-v0.2.7-darwin-arm64.tar.gz` and compare it with the matching
 line in `checksums.txt`. On Windows, use:
 
 ```powershell
-Get-FileHash .\pogo-v0.2.6-windows-amd64.zip -Algorithm SHA256
+Get-FileHash .\pogo-v0.2.7-windows-amd64.zip -Algorithm SHA256
 ```
 
 </details>

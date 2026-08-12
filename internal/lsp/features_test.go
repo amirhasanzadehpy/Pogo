@@ -224,13 +224,16 @@ func TestDeepPathCompletionHoverAndCustomMethods(t *testing.T) {
 		want   []string
 	}{
 		{"lookup relation", "from myapp.models import Book\nBook.objects.filter(author__na|=value)", []string{"name"}},
-		{"chained lookup relation after dunder", "from myapp.models import Book\nBook.objects.exclude(title=\"\").exclude(author__|)", []string{"id", "name", "profile", "exact", "in", "isnull"}},
+		{"Q lookup relation", "from django.db.models import Q\nfrom myapp.models import Book\nBook.objects.filter(Q(author__na|=value))", []string{"name"}},
+		{"chained lookup relation after dunder", "from myapp.models import Book\nBook.objects.exclude(title=\"\").exclude(author__|)", []string{"book", "id", "name", "profile", "exact", "in", "isnull"}},
 		{"lookup transform", "from myapp.models import Book\nBook.objects.filter(published_at__date__g|=value)", []string{"gte"}},
 		{"projection", "from myapp.models import Book\nBook.objects.values(\"title\", \"author__na|\")", []string{"name"}},
 		{"only", "from myapp.models import Book\nBook.objects.only(\"author__na|\")", []string{"name"}},
 		{"select related", "from myapp.models import Book\nBook.objects.select_related(\"author__pro|\")", []string{"profile"}},
+		{"annotated queryset select related", "from django.db.models import QuerySet\nfrom myapp.models import Book\nitems: QuerySet[Book] = get_items()\nitems.select_related(\"author__pro|\")", []string{"profile"}},
+		{"annotated queryset prefetch related", "from django.db.models import QuerySet\nfrom myapp.models import Book\nitems: QuerySet[Book] = get_items()\nitems.prefetch_related(\"author__pro|\")", []string{"profile"}},
 		{"prefetch related", "from myapp.models import Book\nBook.objects.prefetch_related(\"sto|\")", []string{"store_set"}},
-		{"prefetch related after dunder", "from myapp.models import Book\nBook.objects.prefetch_related(\"author__|\")", []string{"profile"}},
+		{"prefetch related after dunder", "from myapp.models import Book\nBook.objects.prefetch_related(\"author__|\")", []string{"books", "profile"}},
 		{"queryset method", "from myapp.models import Book\nBook.objects.ac|", []string{"active"}},
 		{"manager method", "from myapp.models import Book\nBook.catalog.fea|", []string{"featured"}},
 	}
@@ -324,6 +327,100 @@ func TestCompletionFromEnclosingModelClassName(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("completion items = %#v, want related model fields", completion.Items)
+	}
+}
+
+func TestCompletionInsideNestedQLookup(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///nested-q.py"
+	source := []byte("from django.db.models import Count, Q\nfrom myapp.models import Book\nBook.objects.annotate(total=Count(\"id\")).filter(Q(id__in=ids) | Q(author__name=value))")
+	offset := strings.Index(string(source), "author__na") + len("author__na")
+	position, ok := analysis.PositionAt(source, offset)
+	if !ok {
+		t.Fatal("cursor position is invalid")
+	}
+	if err := features.documents.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := features.Completion(uri, position)
+	if err != nil || completion == nil {
+		t.Fatalf("Completion() = %#v, %v", completion, err)
+	}
+	for _, item := range completion.Items {
+		if item.Label == "name" {
+			hoverOffset := strings.Index(string(source), "author__name") + len("author__name")
+			hoverPosition, valid := analysis.PositionAt(source, hoverOffset)
+			if !valid {
+				t.Fatal("hover position is invalid")
+			}
+			hover, hoverErr := features.Hover(uri, hoverPosition)
+			if hoverErr != nil || hover == nil {
+				t.Fatalf("Hover() = %#v, %v", hover, hoverErr)
+			}
+			markup, ok := hover.Contents.(protocol.MarkupContent)
+			if !ok || !strings.Contains(markup.Value, "name") {
+				t.Fatalf("hover contents = %#v", hover.Contents)
+			}
+			return
+		}
+	}
+	t.Fatalf("completion items = %#v, want related model fields", completion.Items)
+}
+
+func TestDjangoShortcutReverseManagerPathFeatures(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///shortcut-reverse-manager.py"
+	source, position := lspSourceAtCursor(t, "from django.db.models import Q\nfrom django.shortcuts import get_object_or_404\nfrom myapp.models import Book\nbook = get_object_or_404(Book, id=1)\nbook.author.books.filter(Q(author__na|me=value))")
+	if err := features.documents.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := features.Completion(uri, position)
+	if err != nil || completion == nil {
+		t.Fatalf("Completion() = %#v, %v", completion, err)
+	}
+	found := false
+	for _, item := range completion.Items {
+		if item.Label == "name" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("completion items = %#v, want related model fields", completion.Items)
+	}
+	hover, err := features.Hover(uri, position)
+	if err != nil || hover == nil {
+		t.Fatalf("Hover() = %#v, %v", hover, err)
+	}
+}
+
+func TestDjangoFunctionExpressionPathFeatures(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///expression-path.py"
+	source, position := lspSourceAtCursor(t, "from django.db.models import Value\nfrom django.db.models.functions import Concat\nfrom myapp.models import Book\nBook.objects.annotate(label=Concat(\"author__na|me\", Value(\" \")))")
+	if err := features.documents.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := features.Completion(uri, position)
+	if err != nil || completion == nil {
+		t.Fatalf("Completion() = %#v, %v", completion, err)
+	}
+	found := false
+	for _, item := range completion.Items {
+		if item.Label == "name" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("completion items = %#v, want related model fields", completion.Items)
+	}
+	hover, err := features.Hover(uri, position)
+	if err != nil || hover == nil {
+		t.Fatalf("Hover() = %#v, %v", hover, err)
 	}
 }
 
@@ -664,8 +761,12 @@ func featureTestGraph(t testingT) *schema.Graph {
 	oneToOne := "one-to-one"
 	manyToMany := "many-to-many"
 	profileLabel := "myapp.Profile"
+	bookLabel := "myapp.Book"
 	storeLabel := "myapp.Store"
 	profileName := "profile"
+	bookQuery := "book"
+	booksAccessor := "books"
+	oneToMany := "one-to-many"
 	storeQuery := "store"
 	storeAccessor := "store_set"
 	querySetClass := "myapp.models.BookQuerySet"
@@ -696,6 +797,11 @@ func featureTestGraph(t testingT) *schema.Graph {
 						Type: "django.db.models.fields.reverse_related.OneToOneRel", InternalType: "OneToOneRel", Name: "profile",
 						IsRelation: true, RelatedModel: &profileLabel, RelationDirection: &reverse, RelationCardinality: &oneToOne,
 						QueryName: &profileName, AccessorName: &profileName, SourceModel: "myapp.Profile", SourceRange: featureTestSourceRange(),
+					},
+					"book": {
+						Type: "django.db.models.fields.reverse_related.ManyToOneRel", InternalType: "ManyToOneRel", Name: "book",
+						IsRelation: true, RelatedModel: &bookLabel, RelationDirection: &reverse, RelationCardinality: &oneToMany,
+						QueryName: &bookQuery, AccessorName: &booksAccessor, SourceModel: "myapp.Book", SourceRange: featureTestSourceRange(),
 					},
 				}),
 				"Profile": featureTestModel("Profile", map[string]schema.Field{
