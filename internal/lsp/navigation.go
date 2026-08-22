@@ -43,14 +43,22 @@ func (features *Features) Definition(uri string, position analysis.Position) (*p
 	if !ok {
 		sourceRange, ok = analysis.ResolveDefinitionSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, filePath)
 	}
+	if ok {
+		location, valid := features.sourceLocation(sourceRange)
+		if !valid {
+			return nil, nil
+		}
+		return &location, nil
+	}
+	aliasRange, ok := analysis.ResolveAnnotationAliasDefinition(snapshot.Source, offset, graph, snapshot.Syntax, filePath)
 	if !ok {
 		return nil, nil
 	}
-	location, ok := features.sourceLocation(sourceRange)
-	if !ok {
+	range_, valid := protocolRange(snapshot.Source, aliasRange)
+	if !valid {
 		return nil, nil
 	}
-	return &location, nil
+	return &protocol.Location{URI: protocol.DocumentUri(uri), Range: range_}, nil
 }
 
 func (features *Features) sourceLocation(sourceRange schema.SourceRange) (protocol.Location, bool) {

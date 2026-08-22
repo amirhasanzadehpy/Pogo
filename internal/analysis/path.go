@@ -155,7 +155,7 @@ func analyzeExpressionPathContext(source []byte, offset int, graph *schema.Graph
 		return Context{}, false
 	}
 	imports, _ := buildEnvironmentAtPath(source[:offset], graph, syntax, offset, filePath)
-	if !strings.HasPrefix(expandImport(expression.name, imports), "django.db.models.functions.") {
+	if !isAnnotationExpressionFunction(expandImport(expression.name, imports)) {
 		return Context{}, false
 	}
 	call, ok := enclosingCallBefore(source, offset, expression.opening)
@@ -690,6 +690,22 @@ func pathMethod(method string) (PathMode, bool, bool) {
 		return PathPrefetchRelated, true, true
 	default:
 		return 0, false, false
+	}
+}
+
+// isAnnotationExpressionFunction reports whether a qualified callee refers to a Django ORM
+// expression whose positional string arguments name a field or annotation alias on the current
+// queryset (F(...), the aggregate functions, or anything under django.db.models.functions).
+func isAnnotationExpressionFunction(qualifiedName string) bool {
+	if strings.HasPrefix(qualifiedName, "django.db.models.functions.") {
+		return true
+	}
+	switch qualifiedName {
+	case "django.db.models.F", "django.db.models.Count", "django.db.models.Sum", "django.db.models.Avg",
+		"django.db.models.Min", "django.db.models.Max", "django.db.models.StdDev", "django.db.models.Variance":
+		return true
+	default:
+		return false
 	}
 }
 

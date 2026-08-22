@@ -78,6 +78,41 @@ func TestDefinitionReturnsExactSchemaLocations(t *testing.T) {
 	}
 }
 
+func TestDefinitionResolvesAnnotationAliasWithinDocument(t *testing.T) {
+	features, _ := navigationTestFeatures(t)
+	defer features.Close()
+	uri := "file:///workspace/annotate-queries.py"
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{"values_list argument", "from myapp.models import Book\nBook.objects.annotate(count=Count(\"id\")).values_list(\"title\", \"cou|nt\")"},
+		{"filter lookup", "from myapp.models import Book\nBook.objects.annotate(count=Count(\"id\")).filter(cou|nt__gt=1)"},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, position := lspSourceAtCursor(t, test.source)
+			if err := features.documents.Open(uri, int32(index+1), string(source)); err != nil {
+				t.Fatal(err)
+			}
+			location, err := features.Definition(uri, position)
+			if err != nil || location == nil {
+				t.Fatalf("Definition() = %#v, %v", location, err)
+			}
+			if string(location.URI) != uri {
+				t.Fatalf("Definition() URI = %s, want %s", location.URI, uri)
+			}
+			snapshot, _ := features.documents.Snapshot(uri)
+			start, startOK := analysis.ByteOffset(snapshot.Source, analysis.Position{Line: uint32(location.Range.Start.Line), Character: uint32(location.Range.Start.Character)})
+			end, endOK := analysis.ByteOffset(snapshot.Source, analysis.Position{Line: uint32(location.Range.End.Line), Character: uint32(location.Range.End.Character)})
+			if !startOK || !endOK || string(snapshot.Source[start:end]) != "count" || end >= len(snapshot.Source) || snapshot.Source[end] != '=' {
+				t.Fatalf("Definition() range = %#v, text %q", location.Range, snapshot.Source[start:min(end+1, len(snapshot.Source))])
+			}
+			features.documents.Close(uri)
+		})
+	}
+}
+
 func TestDefinitionSoftFailsForMissingAndInvalidTargets(t *testing.T) {
 	features, modelsPath := navigationTestFeatures(t)
 	defer features.Close()

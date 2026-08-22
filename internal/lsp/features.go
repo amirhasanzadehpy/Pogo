@@ -179,6 +179,11 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 			}
 			return true
 		})
+		for _, alias := range context.Value.Annotations {
+			if strings.HasPrefix(alias, context.Identifier) {
+				items = append(items, annotationCompletion(alias, replacement))
+			}
+		}
 	case analysis.ContextInstanceMember:
 		graph.VisitInstanceFields(context.Value.CanonicalLabel, func(access schema.FieldAccess) bool {
 			if strings.HasPrefix(access.Name, context.Identifier) {
@@ -186,6 +191,11 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 			}
 			return true
 		})
+		for _, alias := range context.Value.Annotations {
+			if strings.HasPrefix(alias, context.Identifier) {
+				items = append(items, annotationCompletion(alias, replacement))
+			}
+		}
 	case analysis.ContextModelMember:
 		graph.VisitInstanceFields(context.Value.CanonicalLabel, func(access schema.FieldAccess) bool {
 			if strings.HasPrefix(access.Name, context.Identifier) {
@@ -205,6 +215,13 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 		}
 		for _, candidate := range analysis.CompletePath(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment) {
 			items = append(items, pathCompletion(candidate, replacement))
+		}
+		if context.Path.ActiveSegment == 0 && (context.Path.Mode == analysis.PathLookup || context.Path.Mode == analysis.PathProjection) {
+			for _, alias := range context.Value.Annotations {
+				if strings.HasPrefix(alias, context.Identifier) {
+					items = append(items, annotationCompletion(alias, replacement))
+				}
+			}
 		}
 	case analysis.ContextMethodMember:
 		analysis.VisitMethods(graph, context.Value, func(method *schema.MethodRef) bool {
@@ -246,6 +263,21 @@ func (features *Features) Hover(uri string, position analysis.Position) (*protoc
 		}
 		resolved, exists := analysis.ResolvePathSegment(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment)
 		if !exists || resolved.Field == nil || resolved.Text == "" {
+			if context.Path.ActiveSegment == 0 && (context.Path.Mode == analysis.PathLookup || context.Path.Mode == analysis.PathProjection) {
+				for _, alias := range context.Value.Annotations {
+					if alias == context.Identifier {
+						range_, valid := protocolRange(snapshot.Source, context.Replacement)
+						if !valid {
+							return nil, nil
+						}
+						content := annotationHoverMarkdown(alias, snapshot.Source, offset, graph, snapshot.Syntax, filePath)
+						return &protocol.Hover{
+							Contents: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: content},
+							Range:    &range_,
+						}, nil
+					}
+				}
+			}
 			return nil, nil
 		}
 		range_, valid := protocolRange(snapshot.Source, resolved.Range)
@@ -271,7 +303,35 @@ func (features *Features) Hover(uri string, position analysis.Position) (*protoc
 		return &protocol.Hover{Contents: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: methodMarkdown(context.Method)}, Range: &range_}, nil
 	case analysis.ContextQueryKeyword:
 		field, ok = graph.QueryAccess(context.Value.CanonicalLabel, context.Identifier)
+		if !ok || field.Field == nil {
+			for _, alias := range context.Value.Annotations {
+				if alias == context.Identifier {
+					range_, valid := protocolRange(snapshot.Source, context.Replacement)
+					if !valid {
+						return nil, nil
+					}
+					content := annotationHoverMarkdown(alias, snapshot.Source, offset, graph, snapshot.Syntax, filePath)
+					return &protocol.Hover{
+						Contents: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: content},
+						Range:    &range_,
+					}, nil
+				}
+			}
+		}
 	case analysis.ContextInstanceMember:
+		for _, alias := range context.Value.Annotations {
+			if alias == context.Identifier {
+				range_, valid := protocolRange(snapshot.Source, context.Replacement)
+				if !valid {
+					return nil, nil
+				}
+				content := annotationHoverMarkdown(alias, snapshot.Source, offset, graph, snapshot.Syntax, filePath)
+				return &protocol.Hover{
+					Contents: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: content},
+					Range:    &range_,
+				}, nil
+			}
+		}
 		field, ok = graph.InstanceAccess(context.Value.CanonicalLabel, context.Identifier)
 	case analysis.ContextModelMember:
 		manager, exists := graph.Manager(context.Value.CanonicalLabel, context.Identifier)
@@ -339,6 +399,14 @@ func (features *Features) SignatureHelp(uri string, position analysis.Position) 
 	return help, nil
 }
 
+func annotationHoverMarkdown(alias string, source []byte, offset int, graph *schema.Graph, syntax []analysis.SyntaxStatement, filePath string) string {
+	content := fmt.Sprintf("**%s**  \nQuerySet annotation", markdownText(alias))
+	if returnType, ok := analysis.AnnotationReturnType(source, offset, graph, syntax, filePath); ok {
+		content += fmt.Sprintf("\n\n- Return type: `%s`", markdownCode(returnType))
+	}
+	return content
+}
+
 func fieldCompletion(access schema.FieldAccess, replacement protocol.Range) protocol.CompletionItem {
 	kind := protocol.CompletionItemKindField
 	detail := access.Field.Type()
@@ -351,6 +419,20 @@ func fieldCompletion(access schema.FieldAccess, replacement protocol.Range) prot
 		Documentation: documentation,
 		SortText:      &sortText,
 		TextEdit:      protocol.TextEdit{Range: replacement, NewText: access.Name},
+	}
+}
+
+func annotationCompletion(name string, replacement protocol.Range) protocol.CompletionItem {
+	kind := protocol.CompletionItemKindField
+	detail := "QuerySet annotation"
+	sortText := "1-" + name
+	return protocol.CompletionItem{
+		Label:         name,
+		Kind:          &kind,
+		Detail:        &detail,
+		Documentation: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: fmt.Sprintf("**%s**  \nQuerySet annotation", markdownText(name))},
+		SortText:      &sortText,
+		TextEdit:      protocol.TextEdit{Range: replacement, NewText: name},
 	}
 }
 
