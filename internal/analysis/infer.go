@@ -26,6 +26,7 @@ type Value struct {
 	Kind           ValueKind
 	ManagerName    string
 	QuerySetClass  string
+	Annotations    []string
 }
 
 type ContextKind uint8
@@ -64,6 +65,7 @@ var (
 	asBindingPattern         = regexp.MustCompile(`(?m)\bas\s+(\([^\n)]*\)|[A-Za-z_][A-Za-z0-9_]*)`)
 	walrusBindingPattern     = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*:=`)
 	adminRegisterPattern     = regexp.MustCompile(`^@([A-Za-z_][A-Za-z0-9_.]*)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)\s*$`)
+	forHeaderPattern         = regexp.MustCompile(`^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.+)\s*:\s*$`)
 )
 
 const adminQuerySetBinding = "__pogo_admin_queryset__"
@@ -372,12 +374,18 @@ func buildEnvironment(source []byte, graph *schema.Graph, syntax []SyntaxStateme
 	return buildEnvironmentAtPath(source, graph, syntax, offset, "")
 }
 
+type forBinding struct {
+	variable string
+	iterable string
+}
+
 func buildEnvironmentAtPath(source []byte, graph *schema.Graph, syntax []SyntaxStatement, offset int, filePath string) (map[string]string, map[string]Value) {
 	imports := make(map[string]string)
 	values := make(map[string]Value)
 	var guardedBindings []string
 	var futureBindings []string
 	var opaqueBindings []string
+	var pendingForBindings []forBinding
 	lines := bytes.Split(source, []byte{'\n'})
 	if len(syntax) > 0 {
 		ordered := append([]SyntaxStatement(nil), syntax...)
@@ -407,6 +415,17 @@ func buildEnvironmentAtPath(source []byte, graph *schema.Graph, syntax []SyntaxS
 			inScope := statement.ScopeKind == "" || statement.ScopeStart == currentScope.ScopeStart && statement.ScopeEnd == currentScope.ScopeEnd && statement.ScopeKind == currentScope.ScopeKind
 			if statement.Guarded {
 				if inScope && (statement.Start < offset || currentScope.ScopeKind == "function_definition") {
+					// If the cursor is inside a for-in statement, infer the loop variable from the iterable.
+					if statement.Start < offset && offset <= statement.End {
+						firstLine := statement.Text
+						if nl := strings.IndexByte(firstLine, '\n'); nl >= 0 {
+							firstLine = firstLine[:nl]
+						}
+						if match := forHeaderPattern.FindStringSubmatch(firstLine); match != nil {
+							pendingForBindings = append(pendingForBindings, forBinding{variable: match[1], iterable: strings.TrimSpace(match[2])})
+							continue
+						}
+					}
 					guardedBindings = append(guardedBindings, statementBindingNames(statement.Text)...)
 				}
 				continue
@@ -480,6 +499,17 @@ func buildEnvironmentAtPath(source []byte, graph *schema.Graph, syntax []SyntaxS
 			delete(imports, name)
 			continue
 		}
+		if match := forHeaderPattern.FindStringSubmatch(line); match != nil {
+			iterable := resolveExpression(strings.TrimSpace(match[2]), imports, values, graph)
+			name := match[1]
+			delete(imports, name)
+			if iterable.Kind == ValueQuerySet {
+				values[name] = Value{CanonicalLabel: iterable.CanonicalLabel, Kind: ValueModelInstance, Annotations: iterable.Annotations}
+			} else {
+				values[name] = Value{}
+			}
+			continue
+		}
 		if match := assignmentPattern.FindStringSubmatch(line); match != nil {
 			value := Value{}
 			if match[1] == "self" && strings.TrimSpace(match[2]) == "__pogo_model_receiver__" {
@@ -493,6 +523,14 @@ func buildEnvironmentAtPath(source []byte, graph *schema.Graph, syntax []SyntaxS
 			}
 			delete(imports, match[1])
 			values[match[1]] = value
+		}
+	}
+	for _, binding := range pendingForBindings {
+		delete(imports, binding.variable)
+		delete(values, binding.variable)
+		iterable := resolveExpression(binding.iterable, imports, values, graph)
+		if iterable.Kind == ValueQuerySet {
+			values[binding.variable] = Value{CanonicalLabel: iterable.CanonicalLabel, Kind: ValueModelInstance, Annotations: iterable.Annotations}
 		}
 	}
 	for _, name := range guardedBindings {
@@ -849,7 +887,7 @@ func splitBindingTargets(target string) []string {
 
 func recognizedEnvironmentStatement(text string) bool {
 	line := strings.TrimSpace(strings.TrimSuffix(text, "\r"))
-	return fromImportPattern.MatchString(line) || importPattern.MatchString(line) || annotationPattern.MatchString(line) || assignmentPattern.MatchString(line)
+	return fromImportPattern.MatchString(line) || importPattern.MatchString(line) || annotationPattern.MatchString(line) || assignmentPattern.MatchString(line) || forHeaderPattern.MatchString(line)
 }
 
 func resolveExpression(expression string, imports map[string]string, values map[string]Value, graph *schema.Graph) Value {
@@ -939,8 +977,10 @@ func resolveExpression(expression string, imports map[string]string, values map[
 		}
 		name := expression[nameStart:position]
 		called := false
+		callOpen := -1
 		position = skipExpressionSpace(expression, position)
 		if position < len(expression) && expression[position] == '(' {
+			callOpen = position
 			end, ok := skipCall(expression, position)
 			if !ok {
 				return Value{}
@@ -978,10 +1018,26 @@ func resolveExpression(expression string, imports map[string]string, values map[
 			}
 			switch name {
 			case "get", "first", "last", "create":
+				annotations := value.Annotations
 				value.Kind = ValueModelInstance
 				value.ManagerName = ""
 				value.QuerySetClass = ""
-			case "all", "filter", "exclude", "annotate", "alias", "distinct", "order_by", "values", "values_list", "only", "defer", "select_related", "prefetch_related":
+				value.Annotations = annotations
+			case "annotate", "alias":
+				if value.Kind == ValueManager {
+					value.ManagerName = ""
+				}
+				value.Kind = ValueQuerySet
+				if callOpen >= 0 && position > callOpen+1 {
+					newAliases := annotationKeywordNames(expression[callOpen+1 : position-1])
+					if len(newAliases) > 0 {
+						merged := make([]string, len(value.Annotations)+len(newAliases))
+						copy(merged, value.Annotations)
+						copy(merged[len(value.Annotations):], newAliases)
+						value.Annotations = merged
+					}
+				}
+			case "all", "filter", "exclude", "distinct", "order_by", "values", "values_list", "only", "defer", "select_related", "prefetch_related":
 				if value.Kind == ValueManager {
 					value.ManagerName = ""
 				}
@@ -1011,6 +1067,83 @@ func resolveExpression(expression string, imports map[string]string, values map[
 		}
 	}
 	return value
+}
+
+// annotationKeywordNames extracts keyword argument names from a call's argument string.
+// For example, "has_books=Exists(qs), count=Count('id')" returns ["has_books", "count"].
+func annotationKeywordNames(args string) []string {
+	var names []string
+	depth := 0
+	segStart := 0
+	var quote byte
+	escaped := false
+	for index := 0; index <= len(args); index++ {
+		var ch byte
+		if index < len(args) {
+			ch = args[index]
+		}
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',', 0:
+			if depth == 0 {
+				if name, ok := keywordArgName(args[segStart:index]); ok {
+					names = append(names, name)
+				}
+				segStart = index + 1
+			}
+		}
+	}
+	return names
+}
+
+func keywordArgName(segment string) (string, bool) {
+	segment = strings.TrimSpace(segment)
+	for index := 0; index < len(segment); index++ {
+		ch := segment[index]
+		switch ch {
+		case '(', '[', '{':
+			return "", false
+		case '=':
+			if index > 0 {
+				prev := segment[index-1]
+				if prev != '!' && prev != '<' && prev != '>' {
+					next := byte(0)
+					if index+1 < len(segment) {
+						next = segment[index+1]
+					}
+					if next != '=' {
+						name := strings.TrimSpace(segment[:index])
+						if identifierText(name) {
+							return name, true
+						}
+					}
+				}
+			}
+			return "", false
+		}
+	}
+	return "", false
 }
 
 func relatedManagerModel(field *schema.FieldRef) (string, bool) {

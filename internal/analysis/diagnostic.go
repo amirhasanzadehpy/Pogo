@@ -26,7 +26,7 @@ func DiagnoseORM(snapshot Snapshot, graph *schema.Graph) []ORMIssue {
 		return issues
 	}
 	for _, path := range staticORMPaths(snapshot, graph) {
-		problem, invalid := ValidatePath(graph, path.value.CanonicalLabel, path.mode, path.segments)
+		problem, invalid := ValidatePath(graph, path.value.CanonicalLabel, path.mode, path.segments, path.value.Annotations)
 		if !invalid {
 			continue
 		}

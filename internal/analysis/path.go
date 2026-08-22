@@ -693,6 +693,18 @@ func pathMethod(method string) (PathMode, bool, bool) {
 	}
 }
 
+func isAnnotationAlias(annotations []string, name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, alias := range annotations {
+		if alias == name {
+			return true
+		}
+	}
+	return false
+}
+
 func isSpace(value byte) bool {
 	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
@@ -749,8 +761,11 @@ func ResolvePathSegment(graph *schema.Graph, canonicalLabel string, mode PathMod
 	return resolved, true
 }
 
-func ValidatePath(graph *schema.Graph, canonicalLabel string, mode PathMode, segments []PathSegment) (PathIssue, bool) {
+func ValidatePath(graph *schema.Graph, canonicalLabel string, mode PathMode, segments []PathSegment, annotations []string) (PathIssue, bool) {
 	if graph == nil || canonicalLabel == "" || len(segments) == 0 || len(segments) > MaxPathSegments {
+		return PathIssue{}, false
+	}
+	if (mode == PathLookup || mode == PathProjection) && isAnnotationAlias(annotations, segments[0].Text) {
 		return PathIssue{}, false
 	}
 	state := resolverState{model: canonicalLabel}
