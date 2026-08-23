@@ -31,6 +31,10 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 		{"projection transform", "from myapp.models import Book\nBook.objects.values(\"published_at__da|\")", []string{"date"}},
 		{"order by relation", "from myapp.models import Book\nBook.objects.order_by(\"-author__na|\")", []string{"name"}},
 		{"get or create lookup", "from myapp.models import Book\nBook.objects.get_or_create(author__na|=value)", []string{"name"}},
+		{"create field", "from myapp.models import Book\nBook.objects.create(ti|=value)", []string{"title"}},
+		{"update field after filter", "from myapp.models import Book\nBook.objects.filter(author=value).update(ti|=value)", []string{"title"}},
+		{"latest field", "from myapp.models import Book\nBook.objects.latest(\"published_|at\")", []string{"published_at"}},
+		{"dates field", "from myapp.models import Book\nBook.objects.dates(\"published_|at\", \"day\")", []string{"published_at"}},
 		{"field mask", "from myapp.models import Book\nBook.objects.only(\"author__na|\")", []string{"name"}},
 		{"select related", "from myapp.models import Book\nBook.objects.select_related(\"author__pro|\")", []string{"profile"}},
 		{"annotated queryset select related", "from django.db.models import QuerySet\nfrom myapp.models import Book\nitems: QuerySet[Book] = get_items()\nitems.select_related(\"author__pro|\")", []string{"profile"}},
@@ -45,13 +49,23 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			source, offset := sourceAtCursor(t, test.source)
 			context, ok := Analyze(source, offset, graph)
-			if !ok || context.Kind != ContextORMPath || context.Path == nil {
+			if !ok || context.Kind != ContextORMPath && context.Kind != ContextQueryKeyword {
 				t.Fatalf("Analyze() = %#v, %v", context, ok)
 			}
-			candidates := CompletePath(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment)
-			got := make([]string, len(candidates))
-			for index, candidate := range candidates {
-				got[index] = candidate.Name
+			var got []string
+			if context.Kind == ContextQueryKeyword {
+				graph.VisitQueryFields(context.Value.CanonicalLabel, func(access schema.FieldAccess) bool {
+					if strings.HasPrefix(access.Name, context.Identifier) {
+						got = append(got, access.Name)
+					}
+					return true
+				})
+			} else {
+				candidates := CompletePath(graph, context.Value.CanonicalLabel, context.Path.Mode, context.Path.Segments, context.Path.ActiveSegment)
+				got = make([]string, len(candidates))
+				for index, candidate := range candidates {
+					got[index] = candidate.Name
+				}
 			}
 			if !slices.Equal(got, test.want) {
 				t.Fatalf("candidates = %v, want %v", got, test.want)

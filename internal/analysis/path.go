@@ -681,9 +681,9 @@ func splitPath(source []byte, path ByteRange, offset int) ([]PathSegment, int, b
 
 func pathMethod(method string) (PathMode, bool, bool) {
 	switch method {
-	case "filter", "exclude", "get", "get_or_create", "update_or_create":
+	case "filter", "exclude", "get", "get_or_create", "update_or_create", "create", "update":
 		return PathLookup, false, true
-	case "values", "values_list", "order_by":
+	case "values", "values_list", "order_by", "earliest", "latest", "dates", "datetimes":
 		return PathProjection, true, true
 	case "only", "defer":
 		return PathFields, true, true
