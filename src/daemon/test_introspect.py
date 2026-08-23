@@ -372,11 +372,10 @@ class IntrospectionTests(unittest.TestCase):
         self.assertEqual(managers_by_name["objects"]["queryset_class"], "myapp.models.BookQuerySet")
         self.assertTrue(managers_by_name["objects"]["default"])
         self.assertEqual(managers_by_name["objects"]["methods"], [])
-        self.assertEqual(
-            [binding["method"]["name"] for binding in managers_by_name["objects"]["queryset_methods"]],
-            ["active", "published"],
-        )
-        self.assertTrue(all(binding["available_on_manager"] for binding in managers_by_name["objects"]["queryset_methods"]))
+        bindings = {binding["method"]["name"]: binding for binding in managers_by_name["objects"]["queryset_methods"]}
+        self.assertTrue(bindings["all"]["available_on_manager"])
+        self.assertTrue(bindings["filter"]["available_on_manager"])
+        self.assertFalse(bindings["delete"]["available_on_manager"])
         self.assertEqual(book["default_manager"], "objects")
         self.assertEqual(book["base_manager"], {"name": "_base_manager", "owner_class": "django.db.models.manager.Manager"})
 
@@ -395,10 +394,15 @@ class IntrospectionTests(unittest.TestCase):
         self.assertEqual(featured["source_range"], source_range(58, 4, 60, 66))
 
         methods_by_name = {method["name"]: method for method in book["queryset_methods"]}
-        self.assertEqual(list(methods_by_name), ["active", "published"])
+        self.assertIn("all", methods_by_name)
+        self.assertIn("filter", methods_by_name)
+        self.assertIn("count", methods_by_name)
         self.assertEqual(methods_by_name["active"]["signature"], "()")
         self.assertTrue(methods_by_name["active"]["chainable"])
         self.assertTrue(methods_by_name["active"]["assumed_chainable"])
+        self.assertTrue(methods_by_name["all"]["chainable"])
+        self.assertFalse(methods_by_name["count"]["chainable"])
+        self.assertEqual(methods_by_name["all"]["owner_class"], "django.db.models.query.QuerySet")
         self.assertEqual(methods_by_name["active"]["source_range"], source_range(45, 4, 47, 42))
         self.assertEqual(methods_by_name["published"]["source_range"], source_range(49, 4, 54, 9))
 
@@ -813,11 +817,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
             [constraint["name"] for constraint in target["constraints"]],
             ["target_name_nonempty", "target_name_unique"],
         )
-        self.assertEqual(
-            [method["name"] for method in target["queryset_methods"]],
-            ["explode", "nullable", "optional", "static_chain", "wrapped"],
-        )
         methods_by_name = {method["name"]: method for method in target["queryset_methods"]}
+        self.assertTrue(
+            {"all", "filter", "explode", "nullable", "optional", "static_chain", "wrapped"}.issubset(methods_by_name)
+        )
         for method_name in ("nullable", "optional", "wrapped"):
             self.assertFalse(methods_by_name[method_name]["chainable"])
             self.assertFalse(methods_by_name[method_name]["assumed_chainable"])
@@ -833,7 +836,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
         }
         self.assertTrue(bindings["filter"])
         self.assertFalse(bindings["visible"])
-        self.assertFalse(bindings["all"])
+        self.assertTrue(bindings["all"])
         self.assertTrue(bindings["_visible"])
         constraints = {constraint["name"]: constraint for constraint in target["constraints"]}
         self.assertEqual(

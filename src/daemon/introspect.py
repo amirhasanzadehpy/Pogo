@@ -32,6 +32,35 @@ WORKER_ADDRESS_ENV = "POGO_WORKER_ADDRESS"
 WORKER_TOKEN_ENV = "POGO_WORKER_TOKEN"
 WORKER_TOKEN_FILE_ENV = "POGO_WORKER_TOKEN_FILE"
 
+# These public QuerySet methods return a cloned QuerySet and can safely retain
+# Pogo's model/path inference for the next call in a literal chain.
+QUERYSET_CHAINABLE_METHODS = frozenset(
+    {
+        "alias",
+        "all",
+        "annotate",
+        "complex_filter",
+        "defer",
+        "difference",
+        "distinct",
+        "exclude",
+        "extra",
+        "filter",
+        "intersection",
+        "none",
+        "only",
+        "order_by",
+        "prefetch_related",
+        "reverse",
+        "select_for_update",
+        "select_related",
+        "union",
+        "using",
+        "values",
+        "values_list",
+    }
+)
+
 
 def class_path(value):
     cls = value if inspect.isclass(value) else type(value)
@@ -491,7 +520,11 @@ def safe_signature(function):
     parameters = list(signature.parameters.values())
     if parameters and parameters[0].name in {"self", "cls"}:
         signature = signature.replace(parameters=parameters[1:])
-    return str(signature)
+    rendered = str(signature)
+    # Callable defaults can render with a process-specific memory address.
+    if " at 0x" in rendered:
+        return None
+    return rendered
 
 
 def classify_chainable_annotation(annotation):
@@ -593,18 +626,26 @@ def custom_methods(cls, source_index, assume_queryset):
     methods = []
     seen = set()
     for owner in cls.__mro__:
-        if owner.__module__.startswith("django."):
+        if owner.__module__.startswith("django.") and owner.__name__ != "QuerySet":
             continue
         for name, raw in vars(owner).items():
             if isinstance(raw, (staticmethod, classmethod)):
                 raw = raw.__func__
-            if (name.startswith("_") and getattr(raw, "queryset_only", None) is not False) or name in seen or not inspect.isfunction(raw):
+            if (
+                (owner.__module__ == "django.db.models.query" and name.startswith("_"))
+                or (name.startswith("_") and getattr(raw, "queryset_only", None) is not False)
+                or name in seen
+                or not inspect.isfunction(raw)
+            ):
                 continue
             seen.add(name)
-            try:
-                chainable, assumed = annotation_chainability(raw, assume_queryset)
-            except (TypeError, ValueError):
-                chainable, assumed = (True, True) if assume_queryset else (False, False)
+            if owner.__name__ == "QuerySet" and owner.__module__ == "django.db.models.query":
+                chainable, assumed = name in QUERYSET_CHAINABLE_METHODS, False
+            else:
+                try:
+                    chainable, assumed = annotation_chainability(raw, assume_queryset)
+                except (TypeError, ValueError):
+                    chainable, assumed = (True, True) if assume_queryset else (False, False)
             docstring = inspect.cleandoc(raw.__doc__) if raw.__doc__ else None
             methods.append(
                 {
@@ -622,11 +663,6 @@ def custom_methods(cls, source_index, assume_queryset):
 
 
 def queryset_method_available_on_manager(manager, name):
-    # BaseManager.all() intentionally bypasses QuerySet.all(). Other existing
-    # manager proxies dispatch through get_queryset(), including overridden
-    # queryset methods marked queryset_only.
-    if name == "all":
-        return False
     member = inspect.getattr_static(type(manager), name, None)
     return callable(member)
 

@@ -120,7 +120,7 @@ func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax [
 	if value.Kind != ValueManager && value.Kind != ValueQuerySet {
 		return Context{}, false
 	}
-	if _, overridden := ResolveMethod(graph, value, call.method); overridden {
+	if method, overridden := ResolveMethod(graph, value, call.method); overridden && method.OwnerClass() != "django.db.models.query.QuerySet" {
 		return Context{}, false
 	}
 	argument := activeArgument(source, call.argumentsStart, offset)
