@@ -184,6 +184,13 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 				items = append(items, annotationCompletion(alias, replacement))
 			}
 		}
+	case analysis.ContextMetaField:
+		graph.VisitInstanceFields(context.Value.CanonicalLabel, func(access schema.FieldAccess) bool {
+			if strings.HasPrefix(access.Name, context.Identifier) {
+				items = append(items, fieldCompletion(access, replacement))
+			}
+			return true
+		})
 	case analysis.ContextInstanceMember:
 		graph.VisitInstanceFields(context.Value.CanonicalLabel, func(access schema.FieldAccess) bool {
 			if strings.HasPrefix(access.Name, context.Identifier) {
@@ -318,6 +325,8 @@ func (features *Features) Hover(uri string, position analysis.Position) (*protoc
 				}
 			}
 		}
+	case analysis.ContextMetaField:
+		field, ok = graph.InstanceAccess(context.Value.CanonicalLabel, context.Identifier)
 	case analysis.ContextInstanceMember:
 		for _, alias := range context.Value.Annotations {
 			if alias == context.Identifier {

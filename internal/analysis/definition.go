@@ -52,6 +52,12 @@ func contextSourceRange(context Context, graph *schema.Graph) (schema.SourceRang
 			return schema.SourceRange{}, false
 		}
 		return access.Field.SourceRange()
+	case ContextMetaField:
+		access, ok := graph.InstanceAccess(context.Value.CanonicalLabel, context.Identifier)
+		if !ok || access.Field == nil {
+			return schema.SourceRange{}, false
+		}
+		return access.Field.SourceRange()
 	case ContextInstanceMember:
 		access, ok := graph.InstanceAccess(context.Value.CanonicalLabel, context.Identifier)
 		if !ok || access.Field == nil {

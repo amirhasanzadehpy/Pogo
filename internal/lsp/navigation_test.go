@@ -113,6 +113,25 @@ func TestDefinitionResolvesAnnotationAliasWithinDocument(t *testing.T) {
 	}
 }
 
+func TestDefinitionFromMetaField(t *testing.T) {
+	modelsSource := navigationModelsSource + "    class Meta:\n        ordering = ['ti|tle']\n"
+	features, modelsPath := navigationTestFeaturesWithSource(t, strings.Replace(modelsSource, "|", "", 1))
+	defer features.Close()
+	source, position := lspSourceAtCursor(t, modelsSource)
+	uri := mustSourceFileURI(t, modelsPath)
+	if err := features.documents.OpenFile(uri, modelsPath, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	location, err := features.Definition(uri, position)
+	if err != nil || location == nil {
+		t.Fatalf("Definition() = %#v, %v", location, err)
+	}
+	want := protocol.Range{Start: protocol.Position{Line: 5, Character: 4}, End: protocol.Position{Line: 5, Character: 30}}
+	if location.URI != protocol.DocumentUri(uri) || location.Range != want {
+		t.Fatalf("Definition() = %#v, want URI %s range %#v", location, uri, want)
+	}
+}
+
 func TestDefinitionSoftFailsForMissingAndInvalidTargets(t *testing.T) {
 	features, modelsPath := navigationTestFeatures(t)
 	defer features.Close()

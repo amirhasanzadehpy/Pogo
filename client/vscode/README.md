@@ -1,8 +1,11 @@
 # Pogo for VS Code
 
-Pogo adds Django ORM completion, hover information, signature help,
-diagnostics and exact definitions to Python files. The extension automatically
-retriggers suggestions after `__` inside single-line Python strings.
+Pogo adds Django ORM completion, model `Meta` field completion, hover
+information, signature help, diagnostics and exact definitions to Python files.
+It completes runtime model fields in `Meta` options such as `ordering`,
+`unique_together`, and `UniqueConstraint(fields=[...])`. The extension
+automatically retriggers suggestions after `__` inside single-line Python
+strings.
 
 Install the extension, select the project's Python environment in VS Code, and
 open a trusted Django workspace. The extension includes Pogo for supported

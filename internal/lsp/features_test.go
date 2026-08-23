@@ -485,6 +485,48 @@ func TestCompletionFromEnclosingModelClassName(t *testing.T) {
 	}
 }
 
+func TestMetaFieldCompletion(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	for index, sourceWithCursor := range []string{
+		"class Book:\n    class Meta:\n        constraints = [models.UniqueConstraint(fields=['ti|'], name='unique_book_per_author')]",
+		"class Book:\n    class Meta:\n        ordering = ['-ti|']",
+		"class Book:\n    class Meta:\n        unique_together = [('ti|', 'author')]",
+	} {
+		source, position := lspSourceAtCursor(t, sourceWithCursor)
+		documentURI := fmt.Sprintf("file:///meta-%d.py", index)
+		if err := features.documents.OpenFile(documentURI, featureTestModelPath(), 1, string(source)); err != nil {
+			t.Fatal(err)
+		}
+		completion, err := features.Completion(documentURI, position)
+		if err != nil || completion == nil || len(completion.Items) != 1 || completion.Items[0].Label != "title" {
+			t.Fatalf("Completion() = %#v, %v", completion, err)
+		}
+		edit := completion.Items[0].TextEdit.(protocol.TextEdit)
+		if edit.NewText != "title" {
+			t.Fatalf("text edit = %#v", edit)
+		}
+	}
+}
+
+func TestMetaFieldHover(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///meta-hover.py"
+	source, position := lspSourceAtCursor(t, "class Book:\n    class Meta:\n        ordering = ['ti|tle']")
+	if err := features.documents.OpenFile(uri, featureTestModelPath(), 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	hover, err := features.Hover(uri, position)
+	if err != nil || hover == nil {
+		t.Fatalf("Hover() = %#v, %v", hover, err)
+	}
+	markup, ok := hover.Contents.(protocol.MarkupContent)
+	if !ok || !strings.Contains(markup.Value, "**title**") || !strings.Contains(markup.Value, "CharField") {
+		t.Fatalf("hover contents = %#v", hover.Contents)
+	}
+}
+
 func TestCompletionInsideNestedQLookup(t *testing.T) {
 	features := testFeatures(t)
 	defer features.Close()

@@ -38,6 +38,7 @@ const (
 	ContextInstanceMember
 	ContextMethodMember
 	ContextORMPath
+	ContextMetaField
 )
 
 type ByteRange struct {
@@ -86,6 +87,9 @@ func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStat
 	if graph == nil || offset < 0 || offset > len(source) {
 		return Context{}, false
 	}
+	if context, ok := analyzeMetaFieldContext(source, offset, graph, syntax, filePath); ok {
+		return context, true
+	}
 	if context, ok := analyzePathContext(source, offset, graph, syntax, filePath); ok {
 		return context, true
 	}
@@ -113,6 +117,125 @@ func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStat
 	default:
 		return Context{}, false
 	}
+}
+
+func analyzeMetaFieldContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
+	label, ok := enclosingMetaModel(syntax, offset, filePath, graph)
+	if !ok {
+		return Context{}, false
+	}
+	replacement, ok := metaFieldStringRange(source, offset)
+	if !ok || !metaFieldOption(source, replacement.Start) {
+		return Context{}, false
+	}
+	if replacement.Start < replacement.End && (source[replacement.Start] == '-' || source[replacement.Start] == '+') {
+		replacement.Start++
+	}
+	return Context{Kind: ContextMetaField, Value: Value{CanonicalLabel: label, Kind: ValueModelClass}, Identifier: string(source[replacement.Start:replacement.End]), Replacement: replacement}, true
+}
+
+func enclosingMetaModel(syntax []SyntaxStatement, offset int, filePath string, graph *schema.Graph) (string, bool) {
+	var meta SyntaxStatement
+	for _, statement := range syntax {
+		if !statement.ScopeMarker || statement.ScopeKind != "class_definition" || statement.ScopeStart > offset || offset > statement.ScopeEnd || definitionName(statement.Text) != "Meta" {
+			continue
+		}
+		if meta.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < meta.ScopeEnd-meta.ScopeStart {
+			meta = statement
+		}
+	}
+	if meta.ScopeEnd == 0 {
+		return "", false
+	}
+	var parent SyntaxStatement
+	for _, statement := range syntax {
+		if !statement.ScopeMarker || statement.ScopeKind != "class_definition" || statement.Start == meta.Start && statement.End == meta.End || statement.ScopeStart > meta.ScopeStart || meta.ScopeEnd > statement.ScopeEnd {
+			continue
+		}
+		if parent.ScopeEnd == 0 || statement.ScopeEnd-statement.ScopeStart < parent.ScopeEnd-parent.ScopeStart {
+			parent = statement
+		}
+	}
+	if parent.ScopeEnd == 0 {
+		return "", false
+	}
+	return graph.CanonicalLabelForSourceClass(filePath, definitionName(parent.Text))
+}
+
+func definitionName(text string) string {
+	match := definitionBindingPattern.FindStringSubmatch(text)
+	if match == nil {
+		return ""
+	}
+	return match[1]
+}
+
+func metaFieldStringRange(source []byte, offset int) (ByteRange, bool) {
+	for start := offset - 1; start >= 0; start-- {
+		if source[start] != '\'' && source[start] != '"' || start > 0 && source[start-1] == '\\' {
+			continue
+		}
+		quote := source[start]
+		end := start + 1
+		for end < len(source) && (source[end] != quote || source[end-1] == '\\') && source[end] != '\n' {
+			end++
+		}
+		if end < len(source) && source[end] == quote && start < offset && offset <= end {
+			return ByteRange{Start: start + 1, End: end}, true
+		}
+	}
+	return ByteRange{}, false
+}
+
+func metaFieldOption(source []byte, stringStart int) bool {
+	prefix := string(source[:stringStart])
+	option := ""
+	optionStart := -1
+	for _, candidate := range []string{"fields", "ordering", "unique_together", "index_together", "get_latest_by", "order_with_respect_to"} {
+		index := strings.LastIndex(prefix, candidate)
+		if index < 0 || index+len(candidate) >= len(prefix) || !isSpaceOrEquals(prefix[index+len(candidate)]) {
+			continue
+		}
+		if index > optionStart {
+			option = candidate
+			optionStart = index
+		}
+	}
+	if option == "" {
+		return false
+	}
+	assignment := strings.IndexByte(prefix[optionStart+len(option):], '=')
+	if assignment < 0 {
+		return false
+	}
+	assignment += optionStart + len(option)
+	if option == "get_latest_by" || option == "order_with_respect_to" {
+		return strings.TrimSpace(prefix[assignment+1:]) == ""
+	}
+	return metaListOpen(source, assignment+1, stringStart)
+}
+
+func metaListOpen(source []byte, start, end int) bool {
+	depth := 0
+	code := pythonCodeMask(source, end)
+	for index := start; index < end; index++ {
+		if !code[index] {
+			continue
+		}
+		switch source[index] {
+		case '[':
+			depth++
+		case ']':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return depth > 0
+}
+
+func isSpaceOrEquals(value byte) bool {
+	return value == '=' || value == ' ' || value == '\t' || value == '\n'
 }
 
 func queryReceiver(source []byte, before int) (ByteRange, int, bool) {

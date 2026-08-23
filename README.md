@@ -51,7 +51,7 @@ Python tool, not replace it.
 
 | Capability | Django-aware behavior |
 | --- | --- |
-| **Completion** | Fields, foreign-key attnames, relations, reverse names, related managers, lookups, transforms, managers, and custom `QuerySet` methods |
+| **Completion** | Fields, foreign-key attnames, relations, reverse names, `Model.Meta` field options and constraints, related managers, lookups, transforms, managers, and custom `QuerySet` methods |
 | **ORM paths** | `filter`, `exclude`, `get`, `Q(...)`, expression field strings, `values`, `values_list`, `only`, `defer`, `select_related`, and `prefetch_related` |
 | **Hover** | Django field class, database type and column, nullability, `db_index`, uniqueness, relation targets, and field help text |
 | **Signature help** | Cached signatures and docstrings for custom manager and `QuerySet` methods |
