@@ -155,7 +155,7 @@ func analyzeExpressionPathContext(source []byte, offset int, graph *schema.Graph
 		return Context{}, false
 	}
 	imports, _ := buildEnvironmentAtPath(source[:offset], graph, syntax, offset, filePath)
-	if !strings.HasPrefix(expandImport(expression.name, imports), "django.db.models.functions.") {
+	if !isAnnotationExpressionFunction(expandImport(expression.name, imports)) {
 		return Context{}, false
 	}
 	call, ok := enclosingCallBefore(source, offset, expression.opening)
@@ -693,6 +693,34 @@ func pathMethod(method string) (PathMode, bool, bool) {
 	}
 }
 
+// isAnnotationExpressionFunction reports whether a qualified callee refers to a Django ORM
+// expression whose positional string arguments name a field or annotation alias on the current
+// queryset (F(...), the aggregate functions, or anything under django.db.models.functions).
+func isAnnotationExpressionFunction(qualifiedName string) bool {
+	if strings.HasPrefix(qualifiedName, "django.db.models.functions.") {
+		return true
+	}
+	switch qualifiedName {
+	case "django.db.models.F", "django.db.models.Count", "django.db.models.Sum", "django.db.models.Avg",
+		"django.db.models.Min", "django.db.models.Max", "django.db.models.StdDev", "django.db.models.Variance":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAnnotationAlias(annotations []string, name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, alias := range annotations {
+		if alias == name {
+			return true
+		}
+	}
+	return false
+}
+
 func isSpace(value byte) bool {
 	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
@@ -749,8 +777,11 @@ func ResolvePathSegment(graph *schema.Graph, canonicalLabel string, mode PathMod
 	return resolved, true
 }
 
-func ValidatePath(graph *schema.Graph, canonicalLabel string, mode PathMode, segments []PathSegment) (PathIssue, bool) {
+func ValidatePath(graph *schema.Graph, canonicalLabel string, mode PathMode, segments []PathSegment, annotations []string) (PathIssue, bool) {
 	if graph == nil || canonicalLabel == "" || len(segments) == 0 || len(segments) > MaxPathSegments {
+		return PathIssue{}, false
+	}
+	if (mode == PathLookup || mode == PathProjection) && isAnnotationAlias(annotations, segments[0].Text) {
 		return PathIssue{}, false
 	}
 	state := resolverState{model: canonicalLabel}

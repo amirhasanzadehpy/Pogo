@@ -25,6 +25,7 @@ func TestDiagnoseORMClassifiesStaticPaths(t *testing.T) {
 		{"leading argument comment", "Book.objects.filter(\n    # typo\n    titel=1\n)", IssueUnknownPathSegment, "titel"},
 		{"empty projection segment", "Book.objects.values(\"author____name\")", IssueUnknownPathSegment, "__"},
 		{"empty projection path", "Book.objects.values(\"\")", IssueUnknownPathSegment, ""},
+		{"unrelated field still flagged after annotate", "Book.objects.annotate(count=Count(\"id\")).values_list(\"bogus\")", IssueUnknownPathSegment, "bogus"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -65,6 +66,8 @@ func TestDiagnoseORMSuppressesValidDynamicAndIncompleteCode(t *testing.T) {
 		"Book.objects.order_by(\"missing\")",
 		"unknown.objects.filter(titel=1)",
 		"Book.catalog.filter(titel=1)",
+		"Book.objects.values(\"title\").annotate(count=Count(\"id\")).values_list(\"title\", \"count\")",
+		"Book.objects.annotate(count=Count(\"id\")).filter(count__gt=1)",
 	}
 	for _, expression := range tests {
 		t.Run(expression, func(t *testing.T) {

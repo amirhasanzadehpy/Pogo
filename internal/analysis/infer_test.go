@@ -277,6 +277,129 @@ func TestAnalyzeSyntaxSupportsParenthesizedMultilineAssignment(t *testing.T) {
 	}
 }
 
+func TestAnnotateAliasesTrackedOnQuerySet(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	tests := []struct {
+		name        string
+		source      string
+		annotations []string
+	}{
+		{
+			"single alias",
+			"from myapp.models import Author\nqs = Author.objects.annotate(has_books=Exists(published))\nqs.fi|",
+			[]string{"has_books"},
+		},
+		{
+			"alias method",
+			"from myapp.models import Author\nqs = Author.objects.alias(book_count=Count('books'))\nqs.fi|",
+			[]string{"book_count"},
+		},
+		{
+			"preserved through filter",
+			"from myapp.models import Author\nqs = Author.objects.annotate(has_books=Exists(published)).filter(name='x')\nqs.fi|",
+			[]string{"has_books"},
+		},
+		{
+			"multiple annotate calls",
+			"from myapp.models import Author\nqs = Author.objects.annotate(a=Value(1)).annotate(b=Value(2))\nqs.fi|",
+			[]string{"a", "b"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, offset := sourceAtCursor(t, test.source)
+			context, ok := Analyze(source, offset, graph)
+			if !ok || context.Kind != ContextMethodMember {
+				t.Fatalf("Analyze() = %#v, %v", context, ok)
+			}
+			if len(context.Value.Annotations) != len(test.annotations) {
+				t.Fatalf("Annotations = %v, want %v", context.Value.Annotations, test.annotations)
+			}
+			for i, want := range test.annotations {
+				if context.Value.Annotations[i] != want {
+					t.Errorf("Annotations[%d] = %q, want %q", i, context.Value.Annotations[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestAnnotateAliasesCarriedToModelInstance(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	tests := []struct {
+		name        string
+		source      string
+		annotations []string
+	}{
+		{
+			"via first()",
+			"from myapp.models import Author\nauthor = Author.objects.annotate(has_books=Exists(p)).first()\nauthor.has|",
+			[]string{"has_books"},
+		},
+		{
+			"via get()",
+			"from myapp.models import Author\nauthor = Author.objects.annotate(has_books=Exists(p)).get(pk=1)\nauthor.has|",
+			[]string{"has_books"},
+		},
+		{
+			"multiple aliases via last()",
+			"from myapp.models import Author\nauthor = Author.objects.annotate(a=Value(1), b=Value(2)).last()\nauthor.a|",
+			[]string{"a", "b"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, offset := sourceAtCursor(t, test.source)
+			context, ok := Analyze(source, offset, graph)
+			if !ok || context.Kind != ContextInstanceMember {
+				t.Fatalf("Analyze() = %#v, %v", context, ok)
+			}
+			if len(context.Value.Annotations) != len(test.annotations) {
+				t.Fatalf("Annotations = %v, want %v", context.Value.Annotations, test.annotations)
+			}
+			for i, want := range test.annotations {
+				if context.Value.Annotations[i] != want {
+					t.Errorf("Annotations[%d] = %q, want %q", i, context.Value.Annotations[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestAnnotateAliasesCarriedThroughForLoop(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	store := newTestStore(t)
+	uri := "file:///annotate-for.py"
+	sourceWithCursor := "from myapp.models import Author\nqs = Author.objects.annotate(has_books=Exists(p))\nfor author in qs:\n    author.has|"
+	source, offset := sourceAtCursor(t, sourceWithCursor)
+	if err := store.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot(uri)
+	context, ok := AnalyzeSyntax(snapshot.Source, offset, graph, snapshot.Syntax)
+	if !ok || context.Kind != ContextInstanceMember || context.Value.CanonicalLabel != "myapp.Author" {
+		t.Fatalf("AnalyzeSyntax() = %#v, %v", context, ok)
+	}
+	if len(context.Value.Annotations) != 1 || context.Value.Annotations[0] != "has_books" {
+		t.Fatalf("Annotations = %v, want [has_books]", context.Value.Annotations)
+	}
+}
+
+func TestForLoopErasesReboundModelName(t *testing.T) {
+	graph := inferenceTestGraph(t)
+	store := newTestStore(t)
+	uri := "file:///for-rebind.py"
+	sourceWithCursor := "from myapp.models import Author\nfor Author in values:\n    Author.na|"
+	source, offset := sourceAtCursor(t, sourceWithCursor)
+	if err := store.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := store.Snapshot(uri)
+	if context, ok := AnalyzeSyntax(snapshot.Source, offset, graph, snapshot.Syntax); ok {
+		t.Fatalf("for-rebind should not infer model: %#v", context)
+	}
+}
+
 func sourceAtCursor(t *testing.T, value string) ([]byte, int) {
 	t.Helper()
 	if strings.Count(value, "|") != 1 {

@@ -100,6 +100,161 @@ func TestManagerAndInstanceCompletion(t *testing.T) {
 	}
 }
 
+func TestAnnotateAliasCompletionAndHover(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///annotate.py"
+	source := "from myapp.models import Author\nauthor = Author.objects.annotate(has_books=Exists(p)).first()\nauthor.has_books\n"
+	if err := features.documents.Open(uri, 1, source); err != nil {
+		t.Fatal(err)
+	}
+
+	completion, err := features.Completion(uri, analysis.Position{Line: 2, Character: 7})
+	if err != nil {
+		t.Fatalf("Completion() error = %v", err)
+	}
+	if completion == nil {
+		t.Fatal("Completion() = nil, want alias in results")
+	}
+	found := false
+	for _, item := range completion.Items {
+		if item.Label == "has_books" {
+			found = true
+			if item.Detail == nil || *item.Detail != "QuerySet annotation" {
+				t.Errorf("completion detail = %v, want 'QuerySet annotation'", item.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("completion items = %v, want has_books", completion.Items)
+	}
+
+	hover, err := features.Hover(uri, analysis.Position{Line: 2, Character: 10})
+	if err != nil {
+		t.Fatalf("Hover() error = %v", err)
+	}
+	if hover == nil {
+		t.Fatal("Hover() = nil, want annotation hover")
+	}
+	markup, ok := hover.Contents.(protocol.MarkupContent)
+	if !ok || !strings.Contains(markup.Value, "**has\\_books**") || !strings.Contains(markup.Value, "QuerySet annotation") {
+		t.Errorf("hover contents = %#v", hover.Contents)
+	}
+}
+
+func TestAnnotateAliasORMPathCompletionAndHover(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///annotate-path.py"
+	source := "from myapp.models import Author\nAuthor.objects.annotate(count=Count(\"id\")).values_list(\"pk\", \"count\")\n"
+	if err := features.documents.Open(uri, 1, source); err != nil {
+		t.Fatal(err)
+	}
+
+	completion, err := features.Completion(uri, analysis.Position{Line: 1, Character: 64})
+	if err != nil {
+		t.Fatalf("Completion() error = %v", err)
+	}
+	if completion == nil {
+		t.Fatal("Completion() = nil, want alias in results")
+	}
+	found := false
+	for _, item := range completion.Items {
+		if item.Label == "count" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("completion items = %v, want count", completion.Items)
+	}
+
+	hover, err := features.Hover(uri, analysis.Position{Line: 1, Character: 65})
+	if err != nil {
+		t.Fatalf("Hover() error = %v", err)
+	}
+	if hover == nil {
+		t.Fatal("Hover() = nil, want annotation hover")
+	}
+	markup, ok := hover.Contents.(protocol.MarkupContent)
+	if !ok || !strings.Contains(markup.Value, "**count**") || !strings.Contains(markup.Value, "QuerySet annotation") || !strings.Contains(markup.Value, "Return type") || !strings.Contains(markup.Value, "`int`") {
+		t.Errorf("hover contents = %#v", hover.Contents)
+	}
+}
+
+func TestAnnotateAliasBareKeywordHoverShowsReturnType(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///annotate-keyword.py"
+	source := "from myapp.models import Author\nAuthor.objects.annotate(has_books=Exists(x)).filter(has_books=True)\n"
+	if err := features.documents.Open(uri, 1, source); err != nil {
+		t.Fatal(err)
+	}
+	hover, err := features.Hover(uri, analysis.Position{Line: 1, Character: 56})
+	if err != nil {
+		t.Fatalf("Hover() error = %v", err)
+	}
+	if hover == nil {
+		t.Fatal("Hover() = nil, want annotation hover")
+	}
+	markup, ok := hover.Contents.(protocol.MarkupContent)
+	if !ok || !strings.Contains(markup.Value, "**has\\_books**") || !strings.Contains(markup.Value, "`bool`") {
+		t.Errorf("hover contents = %#v", hover.Contents)
+	}
+}
+
+func TestAnnotateAliasInsideFExpressionHover(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///annotate-f-expr.py"
+	source := "from django.db.models import F, Count\nfrom myapp.models import Author\nAuthor.objects.annotate(user_count=Count(\"id\")).annotate(total=F(\"user_count\") + 1)\n"
+	if err := features.documents.Open(uri, 1, source); err != nil {
+		t.Fatal(err)
+	}
+
+	completion, err := features.Completion(uri, analysis.Position{Line: 2, Character: 70})
+	if err != nil {
+		t.Fatalf("Completion() error = %v", err)
+	}
+	if completion == nil {
+		t.Fatal("Completion() = nil, want alias in results")
+	}
+	found := false
+	for _, item := range completion.Items {
+		if item.Label == "user_count" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("completion items = %v, want user_count", completion.Items)
+	}
+
+	hover, err := features.Hover(uri, analysis.Position{Line: 2, Character: 70})
+	if err != nil {
+		t.Fatalf("Hover() error = %v", err)
+	}
+	if hover == nil {
+		t.Fatal("Hover() = nil, want annotation hover")
+	}
+	markup, ok := hover.Contents.(protocol.MarkupContent)
+	if !ok || !strings.Contains(markup.Value, "**user\\_count**") || !strings.Contains(markup.Value, "QuerySet annotation") || !strings.Contains(markup.Value, "`int`") {
+		t.Errorf("hover contents = %#v", hover.Contents)
+	}
+
+	location, err := features.Definition(uri, analysis.Position{Line: 2, Character: 70})
+	if err != nil || location == nil {
+		t.Fatalf("Definition() = %#v, %v", location, err)
+	}
+	if string(location.URI) != uri {
+		t.Fatalf("Definition() URI = %s, want %s", location.URI, uri)
+	}
+	snapshot, _ := features.documents.Snapshot(uri)
+	start, startOK := analysis.ByteOffset(snapshot.Source, analysis.Position{Line: uint32(location.Range.Start.Line), Character: uint32(location.Range.Start.Character)})
+	end, endOK := analysis.ByteOffset(snapshot.Source, analysis.Position{Line: uint32(location.Range.End.Line), Character: uint32(location.Range.End.Character)})
+	if !startOK || !endOK || string(snapshot.Source[start:end]) != "user_count" || end >= len(snapshot.Source) || snapshot.Source[end] != '=' {
+		t.Fatalf("Definition() range = %#v, text %q", location.Range, snapshot.Source[start:min(end+1, len(snapshot.Source))])
+	}
+}
+
 func TestModelSelfRelationChainCompletionAndHover(t *testing.T) {
 	features := testFeatures(t)
 	defer features.Close()
