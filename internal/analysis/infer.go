@@ -267,7 +267,7 @@ func queryReceiver(source []byte, before int) (ByteRange, int, bool) {
 		nameStart--
 	}
 	method := string(source[nameStart:nameEnd])
-	if method != "filter" && method != "exclude" && method != "get" {
+	if method != "filter" && method != "exclude" && method != "get" && method != "get_or_create" && method != "update_or_create" {
 		return ByteRange{}, 0, false
 	}
 	if nameStart == 0 || source[nameStart-1] != '.' || !code[nameStart-1] {

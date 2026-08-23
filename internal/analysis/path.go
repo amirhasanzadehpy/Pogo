@@ -130,6 +130,9 @@ func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax [
 	} else {
 		pathRange, ok = keywordPathRange(source, argument, offset)
 	}
+	if call.method == "order_by" && pathRange.Start < pathRange.End && (source[pathRange.Start] == '-' || source[pathRange.Start] == '+') {
+		pathRange.Start++
+	}
 	if !ok || pathRange.End-pathRange.Start > MaxPathBytes {
 		return Context{}, false
 	}
@@ -204,7 +207,7 @@ func analyzeQPathContext(source []byte, offset int, graph *schema.Graph, syntax 
 	if value.Kind != ValueManager && value.Kind != ValueQuerySet {
 		return Context{}, false
 	}
-	if _, overridden := ResolveMethod(graph, value, call.method); overridden {
+	if method, overridden := ResolveMethod(graph, value, call.method); overridden && method.OwnerClass() != "django.db.models.query.QuerySet" {
 		return Context{}, false
 	}
 	argument := activeArgument(source, qCall.argumentsStart, offset)
@@ -678,9 +681,9 @@ func splitPath(source []byte, path ByteRange, offset int) ([]PathSegment, int, b
 
 func pathMethod(method string) (PathMode, bool, bool) {
 	switch method {
-	case "filter", "exclude", "get":
+	case "filter", "exclude", "get", "get_or_create", "update_or_create":
 		return PathLookup, false, true
-	case "values", "values_list":
+	case "values", "values_list", "order_by":
 		return PathProjection, true, true
 	case "only", "defer":
 		return PathFields, true, true

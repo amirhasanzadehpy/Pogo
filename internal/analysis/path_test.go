@@ -29,6 +29,8 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 		{"transformed lookup", "from myapp.models import Book\nBook.objects.filter(published_at__date__g|=value)", []string{"gte"}},
 		{"projection relation", "from myapp.models import Book\nBook.objects.values(\"title\", \"author__na|\")", []string{"name"}},
 		{"projection transform", "from myapp.models import Book\nBook.objects.values(\"published_at__da|\")", []string{"date"}},
+		{"order by relation", "from myapp.models import Book\nBook.objects.order_by(\"-author__na|\")", []string{"name"}},
+		{"get or create lookup", "from myapp.models import Book\nBook.objects.get_or_create(author__na|=value)", []string{"name"}},
 		{"field mask", "from myapp.models import Book\nBook.objects.only(\"author__na|\")", []string{"name"}},
 		{"select related", "from myapp.models import Book\nBook.objects.select_related(\"author__pro|\")", []string{"profile"}},
 		{"annotated queryset select related", "from django.db.models import QuerySet\nfrom myapp.models import Book\nitems: QuerySet[Book] = get_items()\nitems.select_related(\"author__pro|\")", []string{"profile"}},
