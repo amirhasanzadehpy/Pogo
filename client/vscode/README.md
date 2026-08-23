@@ -3,9 +3,13 @@
 Pogo adds Django ORM completion, model `Meta` field completion, hover
 information, signature help, diagnostics and exact definitions to Python files.
 It completes runtime model fields in `Meta` options such as `ordering`,
-`unique_together`, and `UniqueConstraint(fields=[...])`, plus Django built-in
-and custom `QuerySet` methods. The extension automatically retriggers
-suggestions after `__` inside single-line Python strings.
+`unique_together`, `get_latest_by`, `UniqueConstraint(fields=[...])`, and
+`Index(fields=[...])`, plus Django built-in and custom `QuerySet` methods.
+Field intelligence also covers `filter`, `exclude`, `get`, `get_or_create`,
+`update_or_create`, `create`, `update`, `Q(...)`, `order_by`, `values`,
+`values_list`, `earliest`, `latest`, `dates`, and `datetimes`. The extension
+automatically retriggers suggestions after `__` inside single-line Python
+strings.
 
 Install the extension, select the project's Python environment in VS Code, and
 open a trusted Django workspace. The extension includes Pogo for supported

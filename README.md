@@ -5,6 +5,10 @@
 <h1 align="center">Pogo</h1>
 
 <p align="center">
+  <img src="pogo-logo.jpg" alt="Pogo logo" width="128">
+</p>
+
+<p align="center">
   <strong>Runtime-accurate Django ORM intelligence for your editor.</strong><br>
   Pogo boots the Django project you actually run, builds an immutable schema graph,
   and serves completion, diagnostics, hover, signatures, and navigation from a fast Go LSP.
@@ -52,8 +56,8 @@ Python tool, not replace it.
 | Capability | Django-aware behavior |
 | --- | --- |
 | **Completion** | Fields, foreign-key attnames, relations, reverse names, `Model.Meta` field options and constraints, related managers, lookups, transforms, managers, built-in and custom `QuerySet` methods |
-| **ORM paths** | `filter`, `exclude`, `get`, `Q(...)`, expression field strings, `values`, `values_list`, `only`, `defer`, `select_related`, and `prefetch_related` |
-| **Hover** | Django field class, database type and column, nullability, `db_index`, uniqueness, relation targets, and field help text |
+| **ORM paths** | `filter`, `exclude`, `get`, `get_or_create`, `update_or_create`, `create`, `update`, `Q(...)`, expressions, ordering, projections, field masks, and related loading |
+| **Hover** | Django field metadata plus built-in/custom QuerySet method signatures and docstrings |
 | **Signature help** | Cached signatures and docstrings for manager and built-in or custom `QuerySet` methods |
 | **Diagnostics** | Exact invalid path segments, non-relation traversal, invalid lookups, projections, and `select_related` targets |
 | **Navigation** | Exact definitions for models, fields, relation strings, reverse accessors, managers, built-in or custom `QuerySet` methods, and individual path segments |
@@ -262,19 +266,50 @@ Diagnostics use the exact UTF-16 range for the bad segment. Pogo also detects
 non-relation traversal, invalid transforms or lookups, invalid projection
 paths, and invalid `select_related` targets.
 
+### Model Meta And QuerySet APIs
+
+Pogo completes, hovers, and navigates to model fields inside Django `Meta`
+options such as `ordering`, `unique_together`, `index_together`,
+`get_latest_by`, `order_with_respect_to`, `UniqueConstraint(fields=[...])`, and
+`Index(fields=[...])`. Ordering prefixes are preserved, so `"-tit"` completes
+only the field portion.
+
+```python
+class Loan(models.Model):
+    book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    borrower = models.CharField()
+    returned_at = models.DateTimeField(null=True)
+
+    class Meta:
+        ordering = ["-returned_at"]
+        constraints = [models.UniqueConstraint(fields=["book", "borrower"], name="unique_loan")]
+
+# Field keywords, relation paths, and `Q(...)` paths have completion, hover,
+# definition, and diagnostics.
+Loan.objects.get_or_create(book=kindred, borrower="Grace", returned_at__isnull=True)
+Loan.objects.filter(borrower="Ada", returned_at__isnull=True).update(returned_at=timezone.now())
+Book.objects.filter(Q(author__name__icontains="ursula") | Q(published_year__gte=1970))
+
+# Field-string methods support the same field intelligence.
+Book.objects.annotate(average_price=Avg("price")).values("average_price").order_by("-average_price")[:1]
+Book.objects.latest("published_at")
+```
+
 ### Understand Project APIs
 
-Custom manager and `QuerySet` methods are introspected but never called. Hover
-shows their cached class, signature, and docstring; signature help preserves
-positional-only, keyword-only, variadic, and keyword arguments. Return
-annotations help Pogo continue inference through custom chains.
+Built-in and custom manager/`QuerySet` methods are introspected but never
+called. Hover shows their cached class, signature, and docstring; signature
+help preserves positional-only, keyword-only, variadic, and keyword arguments.
+Methods that return a new QuerySet retain model/path inference through literal
+chains, while scalar, write, and iterator methods safely stop it.
 
 ### Navigate Schema-Backed Code
 
 Go to definition works on model imports, fields, relation segments, reverse
-accessors, managers, custom methods, and static `ForeignKey`, `OneToOneField`,
-`ManyToManyField`, and `related_name` strings. Navigation includes the exact
-target range when its source remains current.
+accessors, managers, built-in and custom QuerySet methods, Meta field strings,
+and static `ForeignKey`, `OneToOneField`, `ManyToManyField`, and `related_name`
+strings. Navigation includes the exact target range when its source remains
+current.
 
 ### Refresh Without Blocking Editing
 
