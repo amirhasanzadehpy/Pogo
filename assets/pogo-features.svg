@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Pogo Django ORM feature tour</title>
+  <desc id="desc">Four editor views show relation-path completion, field hover and navigation, model Meta completion, and built-in QuerySet method intelligence.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#071722"/><stop offset="1" stop-color="#0d1a31"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#55e6ad"/><stop offset="1" stop-color="#49bff3"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity=".28"/></filter>
+    <style>
+      .ui{font-family:Inter,Segoe UI,Arial,sans-serif}.mono{font-family:JetBrains Mono,SFMono-Regular,Consolas,monospace}.title{font-size:27px;font-weight:700;fill:#edf7ff}.label{font-size:15px;font-weight:700;letter-spacing:1.5px;fill:#72e8bb}.muted{fill:#86a0b4}.code{font-size:21px;fill:#d8e5ef}.kw{fill:#c99af7}.type{fill:#62d2ff}.str{fill:#a9dc8e}.field{fill:#ffd479}.panel{fill:#0b1826;stroke:#284256;stroke-width:2}.top{fill:#142536}.popup{fill:#10283a;stroke:#3a6177;stroke-width:2}.small{font-size:16px}.body{font-size:18px}.badge{font-size:14px;font-weight:700;fill:#071722}
+    </style>
+  </defs>
+  <rect width="1600" height="1000" rx="30" fill="url(#bg)"/>
+  <circle cx="1460" cy="30" r="240" fill="#183268" opacity=".35"/><circle cx="50" cy="980" r="210" fill="#0b6c59" opacity=".22"/>
+  <g class="ui">
+    <text x="70" y="70" class="label">POGO IN THE EDITOR</text>
+    <text x="70" y="111" class="title" font-size="35">Django ORM intelligence from the schema you actually run</text>
+    <text x="70" y="143" class="muted body">Completion, hover, signatures, diagnostics, and exact definitions. No Python on the editor hot path.</text>
+    <g transform="translate(1318 65)"><rect width="212" height="42" rx="21" fill="url(#accent)"/><circle cx="25" cy="21" r="6" fill="#071722"/><text x="43" y="27" class="badge">SCHEMA READY</text></g>
+
+    <g transform="translate(70 185)" filter="url(#shadow)">
+      <rect width="710" height="340" rx="20" class="panel"/><path d="M20 0h670a20 20 0 0 1 20 20v44H0V20A20 20 0 0 1 20 0" class="top"/>
+      <circle cx="29" cy="32" r="7" fill="#ff6b79"/><circle cx="53" cy="32" r="7" fill="#ffd166"/><circle cx="77" cy="32" r="7" fill="#55e6ad"/>
+      <text x="108" y="39" class="mono muted small">loans.py</text><text x="26" y="102" class="label">01  DEEP ORM COMPLETION</text>
+      <text x="26" y="145" class="mono code"><tspan class="type">Loan</tspan><tspan>.objects.filter(</tspan></text>
+      <text x="55" y="183" class="mono code"><tspan>book__author__na</tspan><tspan fill="#58e6b2">|</tspan></text>
+      <rect x="240" y="198" width="440" height="90" rx="12" class="popup"/>
+      <rect x="252" y="210" width="416" height="40" rx="8" fill="#19475b"/>
+      <circle cx="274" cy="230" r="7" fill="#55e6ad"/><text x="294" y="237" class="mono field">name</text><text x="570" y="236" class="muted small">CharField</text>
+      <text x="294" y="277" class="mono code">nickname</text><text x="570" y="276" class="muted small">CharField</text>
+      <text x="26" y="316" class="muted small">Relations, reverse names, transforms, lookups, Q(...), and __ paths</text>
+    </g>
+
+    <g transform="translate(820 185)" filter="url(#shadow)">
+      <rect width="710" height="340" rx="20" class="panel"/><path d="M20 0h670a20 20 0 0 1 20 20v44H0V20A20 20 0 0 1 20 0" class="top"/>
+      <circle cx="29" cy="32" r="7" fill="#ff6b79"/><circle cx="53" cy="32" r="7" fill="#ffd166"/><circle cx="77" cy="32" r="7" fill="#55e6ad"/>
+      <text x="108" y="39" class="mono muted small">models.py</text><text x="26" y="102" class="label">02  HOVER + GO TO DEFINITION</text>
+      <text x="26" y="145" class="mono code"><tspan class="type">Loan</tspan><tspan>.objects.update(</tspan><tspan class="field">returned_at</tspan><tspan>=now)</tspan></text>
+      <rect x="115" y="168" width="565" height="128" rx="12" class="popup"/>
+      <text x="137" y="198" class="title small">returned_at</text><text x="260" y="198" class="mono type small">DateTimeField</text>
+      <text x="137" y="229" class="muted small">column: returned_at · null: true · indexed: false</text>
+      <text x="137" y="261" class="muted small">models.py:18  ·  Ctrl+click opens the exact declaration</text>
+      <text x="26" y="316" class="muted small">Fields and methods carry runtime metadata, signatures, docs, and source ranges</text>
+    </g>
+
+    <g transform="translate(70 565)" filter="url(#shadow)">
+      <rect width="710" height="340" rx="20" class="panel"/><path d="M20 0h670a20 20 0 0 1 20 20v44H0V20A20 20 0 0 1 20 0" class="top"/>
+      <circle cx="29" cy="32" r="7" fill="#ff6b79"/><circle cx="53" cy="32" r="7" fill="#ffd166"/><circle cx="77" cy="32" r="7" fill="#55e6ad"/>
+      <text x="108" y="39" class="mono muted small">models.py</text><text x="26" y="102" class="label">03  MODEL META INTELLIGENCE</text>
+      <text x="26" y="144" class="mono code"><tspan class="kw">class</tspan><tspan dx="12">Meta:</tspan></text>
+      <text x="55" y="181" class="mono code"><tspan>ordering = [</tspan><tspan class="str">"-ret</tspan><tspan fill="#58e6b2">|</tspan><tspan class="str">"</tspan><tspan>]</tspan></text>
+      <rect x="225" y="197" width="455" height="84" rx="12" class="popup"/>
+      <rect x="237" y="209" width="431" height="40" rx="8" fill="#19475b"/>
+      <circle cx="259" cy="229" r="7" fill="#55e6ad"/><text x="279" y="236" class="mono field">returned_at</text><text x="554" y="235" class="muted small">DateTimeField</text>
+      <text x="26" y="316" class="muted small">ordering, constraints, indexes, unique_together, get_latest_by, and more</text>
+    </g>
+
+    <g transform="translate(820 565)" filter="url(#shadow)">
+      <rect width="710" height="340" rx="20" class="panel"/><path d="M20 0h670a20 20 0 0 1 20 20v44H0V20A20 20 0 0 1 20 0" class="top"/>
+      <circle cx="29" cy="32" r="7" fill="#ff6b79"/><circle cx="53" cy="32" r="7" fill="#ffd166"/><circle cx="77" cy="32" r="7" fill="#55e6ad"/>
+      <text x="108" y="39" class="mono muted small">reports.py</text><text x="26" y="102" class="label">04  QUERYSET API AWARENESS</text>
+      <text x="26" y="144" class="mono code"><tspan>books.</tspan><tspan class="field">order_by</tspan><tspan>(</tspan><tspan class="str">"-average_price"</tspan><tspan>)</tspan></text>
+      <rect x="65" y="168" width="615" height="128" rx="12" class="popup"/>
+      <text x="87" y="199" class="title small">order_by</text><text x="185" y="199" class="mono type small">(*field_names) → QuerySet</text>
+      <text x="87" y="231" class="muted small">Returns a new QuerySet ordered by fields or annotation aliases.</text>
+      <text x="87" y="263" class="muted small">Django query.py  ·  completion  ·  signature  ·  definition</text>
+      <text x="26" y="316" class="muted small">Built-in and custom methods, annotation aliases, create/update field arguments</text>
+    </g>
+
+    <text x="70" y="958" class="muted small">Illustrated from supported Pogo behavior. Runtime schema metadata comes from the selected Django project.</text>
+    <text x="1530" y="958" text-anchor="end" class="label">PYTHON DISCOVERS · GO ANSWERS</text>
+  </g>
+</svg>

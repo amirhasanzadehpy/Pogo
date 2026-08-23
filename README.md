@@ -1,17 +1,13 @@
 <p align="center">
-  <img src="assets/pogo-hero.png" alt="Pogo completing a Django ORM relation path and showing its runtime schema architecture" width="100%">
+  <img src="assets/pogo-logo.png" alt="Pogo, fast Django ORM intelligence" width="320">
 </p>
 
-<h1 align="center">Pogo</h1>
+<h1 align="center">The Django ORM language server</h1>
 
 <p align="center">
-  <img src="pogo-logo.jpg" alt="Pogo logo" width="128">
-</p>
-
-<p align="center">
-  <strong>Runtime-accurate Django ORM intelligence for your editor.</strong><br>
-  Pogo boots the Django project you actually run, builds an immutable schema graph,
-  and serves completion, diagnostics, hover, signatures, and navigation from a fast Go LSP.
+  <strong>Write Django queries with the context your editor has been missing.</strong><br>
+  Pogo reads the runtime schema from your real Django project, then delivers
+  completion, hover, signature help, diagnostics, and exact navigation from a fast Go server.
 </p>
 
 <p align="center">
@@ -23,35 +19,44 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> |
-  <a href="#what-pogo-adds">Features</a> |
+  <a href="#quick-start"><strong>Get started</strong></a> |
+  <a href="#feature-tour">Feature tour</a> |
   <a href="#performance">Performance</a> |
   <a href="#editor-setup">Editors</a> |
   <a href="#how-it-works">Architecture</a> |
   <a href="https://github.com/amirhasanzadehpy/Pogo/releases">Releases</a>
 </p>
 
-## Why Pogo
+<p align="center">
+  <img src="assets/pogo-features.png" alt="Pogo feature tour showing deep ORM completion, field hover and definition, Model Meta intelligence, and QuerySet API support" width="100%">
+</p>
+
+<p align="center"><em>Runtime-aware Django help where you need it: inside queries, model metadata, and project APIs.</em></p>
+
+## Why Developers Use Pogo
 
 Django's real schema is created at runtime. Installed apps, abstract fields,
 custom managers, `QuerySet` methods, database-specific lookups, reverse
 relations, and project settings all affect what the ORM can do. Static stubs
 alone cannot see the complete result.
 
-Pogo combines both sides:
+Pogo gives your editor that missing runtime context:
 
-- **Django supplies truth.** An embedded Python worker runs `django.setup()` in
-  your selected environment and reads the model registry Django initialized.
-- **Go keeps editing responsive.** The validated schema is indexed once and
-  atomically swapped into an in-process graph. Editor requests do not invoke
-  Python on the hot path.
-- **Analysis stays conservative.** Pogo understands static model values and ORM
-  paths without pretending to be a general Python type checker.
+- **Complete real ORM paths.** Follow fields, relations, reverse accessors,
+  transforms, and lookups through any supported `__` chain.
+- **Understand every field reference.** Hover and jump to definitions from
+  filters, `Q(...)`, projections, updates, ordering, constraints, and `Meta`.
+- **Explore the QuerySet API.** Get signatures, docs, completion, and Django
+  source navigation for built-in methods alongside your custom methods.
+- **Catch mistakes before the request runs.** See exact diagnostics for broken
+  field paths, invalid lookups, and unsafe relation traversal.
+- **Stay responsive.** Django discovers the schema in the background; warmed
+  editor requests read only Pogo's immutable Go graph.
 
 Pogo is designed to run beside Pyright, BasedPyright, Ruff, or another general
 Python tool, not replace it.
 
-## What Pogo Adds
+## Feature Tour
 
 | Capability | Django-aware behavior |
 | --- | --- |
@@ -62,50 +67,6 @@ Python tool, not replace it.
 | **Diagnostics** | Exact invalid path segments, non-relation traversal, invalid lookups, projections, and `select_related` targets |
 | **Navigation** | Exact definitions for models, fields, relation strings, reverse accessors, managers, built-in or custom `QuerySet` methods, and individual path segments |
 | **Schema refresh** | Debounced reloads, atomic graph replacement, and last-valid-schema fallback when a refresh fails |
-
-## Performance
-
-<p align="center">
-  <img src="assets/pogo-benchmarks.png" alt="Pogo p95 interaction latency and release memory budget chart" width="100%">
-</p>
-
-The current reference profile keeps every plotted interaction workload below
-`1 ms` p95, including dense relation completion and a batch of 100 invalid
-expressions. Larger document-update and snapshot workloads are measured
-separately in the full profile.
-
-| Workload | Scope | p95 |
-| --- | --- | ---: |
-| Hover | Loaded-cache handler | `3.50 us` |
-| Completion in a 10,000-model graph | Selected imported model; graph already built | `4.75 us` |
-| Diagnostics | Incremental edit, parse, analysis, and publish | `15.75 us` |
-| Definition | Loaded-cache handler | `28.33 us` |
-| Completion | Incremental edit, parse, and handler | `58.67 us` |
-| Dense relation completion | 256 completion candidates | `496.80 us` |
-| Diagnostic scale | 100 invalid ORM expressions | `653.00 us` |
-
-| Release gate | Observed | Budget |
-| --- | ---: | ---: |
-| Completion p95 | `58.67 us` | `< 10,000 us` |
-| Go server idle RSS | `19.67 MiB` | `<= 50 MiB` |
-| Combined Go + Python idle RSS | `67.55 MiB` | `<= 150 MiB` |
-
-Reference profile: tracked source at `ca86c19`, captured July 31, 2026 on an
-Apple M1 with macOS 26.5.2, Go 1.22.12, Python 3.11.10, and Django 5.2.16.
-Timings are synthetic in-process benchmarks with 200 samples unless stated
-otherwise; editor transport, process startup, and Django schema loading are not
-included. Memory is the maximum observed idle RSS over 20 aligned samples, not
-process-lifetime peak memory. Results vary by machine and project.
-
-Run the same release-gated profile locally:
-
-```sh
-make fixture-env
-make bench
-```
-
-See [Performance Profiles](DEV.md#performance-profiles) for the full benchmark
-matrix, methodology, profiling commands, and CI artifact layout.
 
 ## Quick Start
 
@@ -442,7 +403,49 @@ for Windows JSON paths and restart language servers after changing arguments.
 
 </details>
 
+## Performance
+
+<p align="center">
+  <img src="assets/pogo-benchmarks.png" alt="Pogo p95 interaction latency and release memory budget chart" width="100%">
+</p>
+
+The current reference profile keeps every plotted interaction workload below
+`1 ms` p95, including dense relation completion and a batch of 100 invalid
+expressions. Larger document-update and snapshot workloads are measured
+separately in the full profile.
+
+| Workload | Scope | p95 |
+| --- | --- | ---: |
+| Hover | Loaded-cache handler | `3.50 us` |
+| Completion in a 10,000-model graph | Selected imported model; graph already built | `4.75 us` |
+| Diagnostics | Incremental edit, parse, analysis, and publish | `15.75 us` |
+| Definition | Loaded-cache handler | `28.33 us` |
+| Completion | Incremental edit, parse, and handler | `58.67 us` |
+| Dense relation completion | 256 completion candidates | `496.80 us` |
+| Diagnostic scale | 100 invalid ORM expressions | `653.00 us` |
+
+| Release gate | Observed | Budget |
+| --- | ---: | ---: |
+| Completion p95 | `58.67 us` | `< 10,000 us` |
+| Go server idle RSS | `19.67 MiB` | `<= 50 MiB` |
+| Combined Go + Python idle RSS | `67.55 MiB` | `<= 150 MiB` |
+
+Reference profile: tracked source at `ca86c19`, captured July 31, 2026 on an
+Apple M1 with macOS 26.5.2, Go 1.22.12, Python 3.11.10, and Django 5.2.16.
+Timings are synthetic in-process benchmarks with 200 samples unless stated
+otherwise; editor transport, process startup, and Django schema loading are not
+included. Memory is the maximum observed idle RSS over 20 aligned samples, not
+process-lifetime peak memory. Results vary by machine and project.
+
+Run the same release-gated profile locally with `make fixture-env` followed by
+`make bench`. See [Performance Profiles](DEV.md#performance-profiles) for the
+full matrix, methodology, profiling commands, and CI artifact layout.
+
 ## How It Works
+
+<p align="center">
+  <img src="assets/pogo-hero.png" alt="Pogo runtime schema architecture: Django discovers metadata, an immutable graph stores it, and Go serves editor requests" width="100%">
+</p>
 
 ```mermaid
 flowchart LR

@@ -1,4 +1,16 @@
-# Pogo for VS Code
+<p align="center">
+  <img src="images/pogo-logo.png" alt="Pogo, fast Django ORM intelligence" width="260">
+</p>
+
+<h1 align="center">Pogo for VS Code</h1>
+
+<p align="center"><strong>Runtime-aware completion, hover, diagnostics, signatures, and navigation for the Django ORM.</strong></p>
+
+<p align="center">
+  <img src="images/pogo-features.png" alt="Pogo feature tour showing deep ORM completion, field hover and definition, Model Meta intelligence, and QuerySet API support" width="100%">
+</p>
+
+## What Pogo Adds
 
 Pogo adds Django ORM completion, model `Meta` field completion, hover
 information, signature help, diagnostics and exact definitions to Python files.
@@ -11,11 +23,21 @@ Field intelligence also covers `filter`, `exclude`, `get`, `get_or_create`,
 automatically retriggers suggestions after `__` inside single-line Python
 strings.
 
+- Follow relation, reverse-accessor, transform, and lookup paths through `__`.
+- Complete and navigate field names in `Q(...)`, create/update calls, ordering,
+  constraints, indexes, projections, and related loading.
+- Explore built-in and custom QuerySet APIs with cached signatures and docs.
+- Catch invalid ORM paths before they reach a request or background task.
+
+## Get Started
+
 Install the extension, select the project's Python environment in VS Code, and
 open a trusted Django workspace. The extension includes Pogo for supported
 Linux, macOS, and Windows extension hosts; no separate server installation is
 needed. For a local source build, **Pogo: Executable Path** can override the
 bundled server.
+
+## Configuration
 
 | Setting | Behavior |
 | --- | --- |
