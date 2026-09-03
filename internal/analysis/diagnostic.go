@@ -25,7 +25,11 @@ func DiagnoseORM(snapshot Snapshot, graph *schema.Graph) []ORMIssue {
 	if graph == nil || !snapshot.Parsed {
 		return issues
 	}
-	for _, path := range staticORMPaths(snapshot, graph) {
+	var paths []staticORMPath
+	paths = append(paths, staticORMPaths(snapshot, graph)...)
+	paths = append(paths, staticConstructorPaths(snapshot, graph)...)
+	paths = append(paths, staticFieldListPaths(snapshot, graph)...)
+	for _, path := range paths {
 		problem, invalid := ValidatePath(graph, path.value.CanonicalLabel, path.mode, path.segments, path.value.Annotations)
 		if !invalid {
 			continue
@@ -83,6 +87,92 @@ func staticORMPaths(snapshot Snapshot, graph *schema.Graph) []staticORMPath {
 				continue
 			}
 			paths = append(paths, staticORMPath{value: value, mode: mode, segments: segments})
+		}
+	}
+	return paths
+}
+
+// staticConstructorPaths finds bare model constructor calls, e.g. Book(title=..., author=...),
+// and collects their keyword argument names for validation as field paths against the
+// constructed model, mirroring analyzeConstructorPathContext's completion behavior.
+func staticConstructorPaths(snapshot Snapshot, graph *schema.Graph) []staticORMPath {
+	if graph == nil || !snapshot.Parsed {
+		return nil
+	}
+	var paths []staticORMPath
+	for _, call := range snapshot.Calls {
+		if call.Receiver.Start < call.Receiver.End {
+			continue
+		}
+		imports, _ := buildEnvironmentAtPath(snapshot.Source[:call.Range.Start], graph, snapshot.Syntax, call.Range.Start, snapshot.FilePath)
+		label, ok := resolveClass(call.Method, imports, graph)
+		if !ok {
+			continue
+		}
+		value := Value{CanonicalLabel: label, Kind: ValueModelClass}
+		for _, argument := range splitStaticArguments(snapshot.Source, call.Arguments) {
+			pathRange, ok := diagnosticKeywordPath(snapshot.Source, argument)
+			if !ok || pathRange.End-pathRange.Start > MaxPathBytes {
+				continue
+			}
+			segments, ok := diagnosticPathSegments(snapshot.Source, pathRange)
+			if !ok || len(segments) > MaxPathSegments {
+				continue
+			}
+			paths = append(paths, staticORMPath{value: value, mode: PathLookup, segments: segments})
+		}
+	}
+	return paths
+}
+
+// staticFieldListPaths finds bulk_create/bulk_update calls and collects the field names
+// listed in their unique_fields/update_fields/fields keyword arguments, mirroring
+// analyzeFieldListArgumentContext's completion behavior.
+func staticFieldListPaths(snapshot Snapshot, graph *schema.Graph) []staticORMPath {
+	if graph == nil || !snapshot.Parsed {
+		return nil
+	}
+	var paths []staticORMPath
+	for _, call := range snapshot.Calls {
+		if call.Method != "bulk_create" && call.Method != "bulk_update" {
+			continue
+		}
+		if call.Receiver.Start < 0 || call.Receiver.End > len(snapshot.Source) || call.Receiver.Start >= call.Receiver.End {
+			continue
+		}
+		value := inferExpressionAtPath(
+			strings.TrimSpace(string(snapshot.Source[call.Receiver.Start:call.Receiver.End])),
+			snapshot.Source[:call.Range.Start], graph, snapshot.Syntax, call.Range.Start, snapshot.FilePath,
+		)
+		if value.Kind != ValueManager && value.Kind != ValueQuerySet {
+			continue
+		}
+		if _, overridden := ResolveMethod(graph, value, call.Method); overridden {
+			continue
+		}
+		for _, argument := range splitStaticArguments(snapshot.Source, call.Arguments) {
+			keyword, ok := argumentKeyword(snapshot.Source[argument.Start:argument.End])
+			if !ok || !isFieldListKeyword(call.Method, keyword) {
+				continue
+			}
+			valueStart, ok := keywordArgumentValueStart(snapshot.Source, argument.Start, argument.End)
+			if !ok {
+				continue
+			}
+			elements, ok := stringListElements(snapshot.Source, valueStart)
+			if !ok {
+				continue
+			}
+			for _, element := range elements {
+				if element.End-element.Start > MaxPathBytes {
+					continue
+				}
+				segments, ok := diagnosticPathSegments(snapshot.Source, element)
+				if !ok || len(segments) > MaxPathSegments {
+					continue
+				}
+				paths = append(paths, staticORMPath{value: value, mode: PathFields, segments: segments})
+			}
 		}
 	}
 	return paths

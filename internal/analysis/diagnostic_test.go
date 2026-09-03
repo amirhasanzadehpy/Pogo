@@ -27,6 +27,10 @@ func TestDiagnoseORMClassifiesStaticPaths(t *testing.T) {
 		{"empty projection segment", "Book.objects.values(\"author____name\")", IssueUnknownPathSegment, "__"},
 		{"empty projection path", "Book.objects.values(\"\")", IssueUnknownPathSegment, ""},
 		{"unrelated field still flagged after annotate", "Book.objects.annotate(count=Count(\"id\")).values_list(\"bogus\")", IssueUnknownPathSegment, "bogus"},
+		{"constructor unknown field", "Book(titel=1)", IssueUnknownPathSegment, "titel"},
+		{"bulk_create unique_fields unknown", "Book.objects.bulk_create(items, unique_fields=[\"titel\"])", IssueUnknownPathSegment, "titel"},
+		{"bulk_update fields unknown", "Book.objects.bulk_update(items, fields=[\"titel\"])", IssueUnknownPathSegment, "titel"},
+		{"bulk_create update_fields nonrelation traversal", "Book.objects.bulk_create(items, update_fields=[\"title__name\"])", IssueNonRelationTraversal, "name"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -68,6 +72,11 @@ func TestDiagnoseORMSuppressesValidDynamicAndIncompleteCode(t *testing.T) {
 		"Book.catalog.filter(titel=1)",
 		"Book.objects.values(\"title\").annotate(count=Count(\"id\")).values_list(\"title\", \"count\")",
 		"Book.objects.annotate(count=Count(\"id\")).filter(count__gt=1)",
+		"Book(title='x')",
+		"Book.objects.bulk_create(items, unique_fields=[\"title\"])",
+		"Book.objects.bulk_update(items, fields=[\"title\"])",
+		"range(10)",
+		"str(value)",
 	}
 	for _, expression := range tests {
 		t.Run(expression, func(t *testing.T) {
