@@ -2,13 +2,13 @@
 
 All notable changes to Pogo are documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-09-03
 
 ### Added
 - CI now publishes tagged releases to the VS Code Marketplace and Open VSX, in addition to GitHub Releases.
 - MIT license.
 - Marketplace-required extension metadata: icon and gallery banner.
-- Completion, hover, and go-to-definition for model constructor keyword arguments and for field names inside `bulk_create`/`bulk_update` list-literal arguments (`unique_fields`, `update_fields`, `fields`).
+- Completion, hover, go-to-definition, and diagnostics for model constructor keyword arguments and for field names inside `bulk_create`/`bulk_update` list-literal arguments (`unique_fields`, `update_fields`, `fields`).
 
 ### Fixed
 - The worker now surfaces the actual exception when Django schema introspection fails, instead of a generic message, so misconfiguration (ambiguous settings module, unsupported Django version, etc.) is diagnosable from the log.
@@ -18,6 +18,7 @@ All notable changes to Pogo are documented in this file.
 
 ### Changed
 - Removed the `private` flag from the VS Code extension manifest to allow Marketplace publishing.
+- Split the embedded Python worker's IPC/wire-protocol layer out of `introspect.py` into a separate `protocol.py` module.
 
 ## [0.2.7] - 2026-08-12
 ### Added
