@@ -4,7 +4,6 @@
   "description": "Django ORM language support powered by the Pogo language server.",
   "version": "0.2.7",
   "publisher": "amirhasanzadehpy",
-  "private": true,
   "type": "commonjs",
   "engines": {
     "vscode": "^1.91.0"
