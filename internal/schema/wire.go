@@ -10,17 +10,21 @@ func ValidateWire(payload []byte) error {
 	if err := json.Unmarshal(payload, &root); err != nil {
 		return err
 	}
-	if err := requireKeys(root, "schema_version", "position_encoding", "lookup_transform_max_depth", "lookup_path_max_count", "schema_sources", "schema_sources_complete", "apps"); err != nil {
+	if err := requireKeys(root, "schema_version", "position_encoding", "lookup_transform_max_depth", "lookup_path_max_count", "schema_sources", "schema_sources_complete", "queryset_method_defs", "apps"); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	if err := requireKinds(root, map[string]jsonKind{
 		"schema_version": kindNumber, "position_encoding": kindString, "lookup_transform_max_depth": kindNumber,
-		"lookup_path_max_count": kindNumber, "schema_sources": kindArray, "schema_sources_complete": kindBool, "apps": kindObject,
+		"lookup_path_max_count": kindNumber, "schema_sources": kindArray, "schema_sources_complete": kindBool,
+		"queryset_method_defs": kindArray, "apps": kindObject,
 	}); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	if err := validateStringArray(root["schema_sources"]); err != nil {
 		return fmt.Errorf("schema_sources: %w", err)
+	}
+	if err := validateArray(root["queryset_method_defs"], validateMethodWire); err != nil {
+		return fmt.Errorf("queryset_method_defs: %w", err)
 	}
 	var apps map[string]json.RawMessage
 	if err := json.Unmarshal(root["apps"], &apps); err != nil {
@@ -102,7 +106,7 @@ func validateModelWire(payload []byte) error {
 	if err := validateArray(object["managers"], validateManagerWire); err != nil {
 		return fmt.Errorf("managers: %w", err)
 	}
-	if err := validateArray(object["queryset_methods"], validateMethodWire); err != nil {
+	if err := validateArray(object["queryset_methods"], validateMethodKeyWire); err != nil {
 		return fmt.Errorf("queryset_methods: %w", err)
 	}
 	if err := validateArray(object["indexes"], func(value json.RawMessage) error {
@@ -189,7 +193,7 @@ func validateManagerWire(payload json.RawMessage) error {
 		if err := requireKinds(binding, map[string]jsonKind{"method": kindObject, "available_on_manager": kindBool}); err != nil {
 			return err
 		}
-		return validateMethodWire(binding["method"])
+		return validateMethodKeyWire(binding["method"])
 	})
 }
 
@@ -202,6 +206,14 @@ func validateMethodWire(payload json.RawMessage) error {
 		return err
 	}
 	return validateSourceRangeWire(object["source_range"])
+}
+
+func validateMethodKeyWire(payload json.RawMessage) error {
+	object, err := rawObject(payload)
+	if err != nil {
+		return err
+	}
+	return requireKinds(object, map[string]jsonKind{"name": kindString, "owner_class": kindString})
 }
 
 func validateFieldWire(payload json.RawMessage) error {

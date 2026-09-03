@@ -19,7 +19,7 @@ import tokenize
 import traceback
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 LOOKUP_TRANSFORM_MAX_DEPTH = 2
 MAX_LOOKUP_PATHS = 512
 PROTOCOL_VERSION = 1
@@ -653,7 +653,7 @@ def custom_methods(cls, source_index, assume_queryset):
                     "owner_class": class_path(owner),
                     "signature": safe_signature(raw),
                     "docstring": docstring,
-                    "source_range": source_index.method_range(owner, name),
+                    "source_range": source_index.method_range(owner, name) or source_index.class_info(owner)["range"],
                     "chainable": chainable,
                     "assumed_chainable": assumed,
                 }
@@ -677,16 +677,18 @@ def manager_source_range(model, manager, source_index):
     return source_index.class_info(model)["range"]
 
 
-def serialize_managers(model, source_index):
+def serialize_managers(model, source_index, registry):
     managers = []
-    queryset_methods = {}
+    queryset_method_keys = set()
     local_names = {manager.name for manager in model._meta.local_managers}
     for manager in sorted(model._meta.managers, key=lambda item: (item.name, class_path(item))):
         queryset_class = getattr(manager, "_queryset_class", None)
         manager_methods = custom_methods(type(manager), source_index, False)
         current_queryset_methods = custom_methods(queryset_class, source_index, True) if queryset_class else []
         for method in current_queryset_methods:
-            queryset_methods[(method["name"], method["owner_class"])] = method
+            key = (method["name"], method["owner_class"])
+            queryset_method_keys.add(key)
+            registry.setdefault(key, method)
         managers.append(
             {
                 "name": manager.name,
@@ -699,15 +701,15 @@ def serialize_managers(model, source_index):
                 "methods": manager_methods,
                 "queryset_methods": [
                     {
-                        "method": method,
+                        "method": {"name": method["name"], "owner_class": method["owner_class"]},
                         "available_on_manager": queryset_method_available_on_manager(manager, method["name"]),
                     }
                     for method in current_queryset_methods
                 ],
             }
         )
-    methods = [queryset_methods[key] for key in sorted(queryset_methods)]
-    return managers, methods
+    method_refs = [{"name": name, "owner_class": owner_class} for name, owner_class in sorted(queryset_method_keys)]
+    return managers, method_refs
 
 
 def serialize_parents(model, source_index):
@@ -780,14 +782,14 @@ def serialize_constraints(model, source_index):
     return constraints
 
 
-def serialize_model(model, source_index, connection):
+def serialize_model(model, source_index, connection, registry):
     from django.db import models
 
     model_info = source_index.class_info(model)
     fields = {}
     for field in sorted(model._meta.get_fields(include_parents=True, include_hidden=False), key=lambda item: item.name):
         fields[field.name] = serialize_field(field, model, source_index, connection)
-    managers, queryset_methods = serialize_managers(model, source_index)
+    managers, queryset_methods = serialize_managers(model, source_index, registry)
     custom_manager_names = sorted(
         manager.name for manager in model._meta.local_managers if not getattr(manager, "auto_created", False)
     )
@@ -905,6 +907,7 @@ def build_snapshot(project_root, settings_name):
 
     source_index = SourceIndex()
     connection = connections["default"]
+    queryset_method_registry = {}
     models = sorted(
         (model for model in apps.get_models() if not model._meta.abstract and not model._meta.proxy),
         key=lambda item: item._meta.label_lower,
@@ -921,7 +924,7 @@ def build_snapshot(project_root, settings_name):
     for model in models:
         config = model._meta.app_config
         app_entry = app_models[config.label]
-        serialized = serialize_model(model, source_index, connection)
+        serialized = serialize_model(model, source_index, connection, queryset_method_registry)
         app_entry["models"][model.__name__] = serialized
 
     settings_module = importlib.import_module(settings_name)
@@ -939,6 +942,7 @@ def build_snapshot(project_root, settings_name):
         app_entry = app_models[label]
         app_entry["models"] = {name: app_entry["models"][name] for name in sorted(app_entry["models"])}
         ordered_apps[label] = app_entry
+    queryset_method_defs = [queryset_method_registry[key] for key in sorted(queryset_method_registry)]
     return {
         "schema_version": SCHEMA_VERSION,
         "position_encoding": "utf-8-bytes",
@@ -946,6 +950,7 @@ def build_snapshot(project_root, settings_name):
         "lookup_path_max_count": MAX_LOOKUP_PATHS,
         "schema_sources": project_sources,
         "schema_sources_complete": sources_complete,
+        "queryset_method_defs": queryset_method_defs,
         "apps": ordered_apps,
     }
 class FrameError(Exception):

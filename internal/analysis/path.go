@@ -110,7 +110,13 @@ func analyzePathContext(source []byte, offset int, graph *schema.Graph, syntax [
 		if context, qPath := analyzeQPathContext(source, offset, graph, syntax, filePath); qPath {
 			return context, true
 		}
+		if context, constructorPath := analyzeConstructorPathContext(source, offset, graph, syntax, filePath); constructorPath {
+			return context, true
+		}
 		return analyzeExpressionPathContext(source, offset, graph, syntax, filePath)
+	}
+	if context, fieldListPath := analyzeFieldListArgumentContext(source, offset, graph, syntax, filePath, call); fieldListPath {
+		return context, true
 	}
 	mode, stringPath, ok := pathMethod(call.method)
 	if !ok {
@@ -228,6 +234,129 @@ func analyzeQPathContext(source []byte, offset int, graph *schema.Graph, syntax 
 		return Context{Kind: ContextQueryKeyword, Value: value, Identifier: segments[0].Text, Replacement: path.Replacement}, true
 	}
 	return Context{Kind: ContextORMPath, Value: value, Identifier: segments[active].Text, Replacement: path.Replacement, Path: path}, true
+}
+
+// analyzeConstructorPathContext recognizes keyword arguments passed to a bare model
+// constructor call, e.g. Book(title=..., author=...), and treats them like the field
+// keywords already supported for Model.objects.create(...).
+func analyzeConstructorPathContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
+	call, ok := enclosingFunctionCall(source, offset)
+	if !ok {
+		return Context{}, false
+	}
+	imports, _ := buildEnvironmentAtPath(source[:offset], graph, syntax, offset, filePath)
+	label, ok := resolveClass(call.name, imports, graph)
+	if !ok {
+		return Context{}, false
+	}
+	value := Value{CanonicalLabel: label, Kind: ValueModelClass}
+	argument := activeArgument(source, call.argumentsStart, offset)
+	pathRange, ok := keywordPathRange(source, argument, offset)
+	if !ok || pathRange.End-pathRange.Start > MaxPathBytes {
+		return Context{}, false
+	}
+	segments, active, onSeparator, ok := splitPath(source, pathRange, offset)
+	if !ok || len(segments) > MaxPathSegments {
+		return Context{}, false
+	}
+	path := &PathContext{
+		Method: call.name, Mode: PathLookup, Segments: segments, ActiveSegment: active,
+		Replacement: segments[active].Range, Arguments: ByteRange{Start: call.argumentsStart, End: offset}, ActiveArgument: argument.index,
+		OnSeparator: onSeparator,
+	}
+	if len(segments) == 1 {
+		return Context{Kind: ContextQueryKeyword, Value: value, Identifier: segments[0].Text, Replacement: path.Replacement}, true
+	}
+	return Context{Kind: ContextORMPath, Value: value, Identifier: segments[active].Text, Replacement: path.Replacement, Path: path}, true
+}
+
+// analyzeFieldListArgumentContext recognizes the field-name-list keyword arguments of
+// bulk_create/bulk_update (unique_fields, update_fields, fields), whose values are a
+// list literal of field name strings rather than a single positional string.
+func analyzeFieldListArgumentContext(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string, call callContext) (Context, bool) {
+	argument := activeArgument(source, call.argumentsStart, offset)
+	argumentEnd := activeArgumentEnd(source, argument.start)
+	keyword, isKeyword := argumentKeyword(source[argument.start:argumentEnd])
+	if !isKeyword || !isFieldListKeyword(call.method, keyword) {
+		return Context{}, false
+	}
+	valueStart, ok := keywordArgumentValueStart(source, argument.start, argumentEnd)
+	if !ok {
+		return Context{}, false
+	}
+	value := inferExpressionAtPath(strings.TrimSpace(string(source[call.receiver.Start:call.receiver.End])), source[:offset], graph, syntax, offset, filePath)
+	if value.Kind != ValueManager && value.Kind != ValueQuerySet {
+		return Context{}, false
+	}
+	if method, overridden := ResolveMethod(graph, value, call.method); overridden && method.OwnerClass() != "django.db.models.query.QuerySet" {
+		return Context{}, false
+	}
+	pathRange, ok := stringListPathRange(source, valueStart, offset)
+	if !ok || pathRange.End-pathRange.Start > MaxPathBytes {
+		return Context{}, false
+	}
+	segments, active, onSeparator, ok := splitPath(source, pathRange, offset)
+	if !ok || len(segments) > MaxPathSegments {
+		return Context{}, false
+	}
+	path := &PathContext{
+		Method: call.method, Mode: PathFields, Segments: segments, ActiveSegment: active,
+		Replacement: segments[active].Range, Arguments: ByteRange{Start: call.argumentsStart, End: offset}, ActiveArgument: argument.index,
+		OnSeparator: onSeparator,
+	}
+	return Context{Kind: ContextORMPath, Value: value, Identifier: segments[active].Text, Replacement: path.Replacement, Path: path}, true
+}
+
+func isFieldListKeyword(method, keyword string) bool {
+	switch method {
+	case "bulk_create":
+		return keyword == "unique_fields" || keyword == "update_fields"
+	case "bulk_update":
+		return keyword == "fields"
+	default:
+		return false
+	}
+}
+
+// keywordArgumentValueStart returns the offset of the value following "keyword=" within
+// source[start:end], skipping leading whitespace. It mirrors argumentKeyword's depth-aware
+// scan for the top-level '=' so nested parens/brackets/quotes in the keyword don't confuse it.
+func keywordArgumentValueStart(source []byte, start, end int) (int, bool) {
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := start; index < end; index++ {
+		value := source[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch value {
+		case '\'', '"':
+			quote = value
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case '=':
+			if depth == 0 {
+				valueStart := index + 1
+				for valueStart < end && isSpace(source[valueStart]) {
+					valueStart++
+				}
+				return valueStart, true
+			}
+		}
+	}
+	return 0, false
 }
 
 type callContext struct {
@@ -640,6 +769,80 @@ func stringPathRange(source []byte, argument argumentContext, offset int) (ByteR
 		return ByteRange{}, false
 	}
 	return ByteRange{Start: contentStart, End: end}, true
+}
+
+// stringListPathRange locates the quoted string element containing offset inside a
+// list literal, e.g. the "b" in ["a", "b", "c"]. start must point at the list's
+// opening '['. It returns false if offset falls outside any element's string content,
+// or if an element isn't a simple (optionally r/u prefixed) quoted string.
+func stringListPathRange(source []byte, start, offset int) (ByteRange, bool) {
+	for start < len(source) && isSpace(source[start]) {
+		start++
+	}
+	if start >= len(source) || source[start] != '[' {
+		return ByteRange{}, false
+	}
+	index := start + 1
+	for index < len(source) {
+		for index < len(source) && isSpace(source[index]) {
+			index++
+		}
+		if index >= len(source) || source[index] == ']' {
+			return ByteRange{}, false
+		}
+		prefixStart := index
+		for index < len(source) && isIdentifierByte(source[index]) {
+			index++
+		}
+		prefix := strings.ToLower(string(source[prefixStart:index]))
+		if index >= len(source) || (source[index] != '\'' && source[index] != '"') {
+			return ByteRange{}, false
+		}
+		if strings.ContainsAny(prefix, "bf") || (prefix != "" && prefix != "r" && prefix != "u") {
+			return ByteRange{}, false
+		}
+		quote := source[index]
+		quoteWidth := 1
+		if index+2 < len(source) && source[index+1] == quote && source[index+2] == quote {
+			quoteWidth = 3
+		}
+		contentStart := index + quoteWidth
+		contentEnd := contentStart
+		escaped := false
+		for contentEnd < len(source) {
+			if source[contentEnd] == '\\' {
+				escaped = !escaped
+				contentEnd++
+				continue
+			}
+			if source[contentEnd] == quote && !escaped {
+				if quoteWidth == 1 || contentEnd+2 < len(source) && source[contentEnd+1] == quote && source[contentEnd+2] == quote {
+					break
+				}
+			}
+			escaped = false
+			if source[contentEnd] == '\n' && quoteWidth == 1 {
+				return ByteRange{}, false
+			}
+			contentEnd++
+		}
+		if contentEnd >= len(source) || strings.ContainsRune(string(source[contentStart:contentEnd]), '\\') {
+			return ByteRange{}, false
+		}
+		if offset >= contentStart && offset <= contentEnd {
+			return ByteRange{Start: contentStart, End: contentEnd}, true
+		}
+		index = contentEnd + quoteWidth
+		for index < len(source) && isSpace(source[index]) {
+			index++
+		}
+		if index < len(source) && source[index] == ',' {
+			index++
+			continue
+		}
+		return ByteRange{}, false
+	}
+	return ByteRange{}, false
 }
 
 func splitPath(source []byte, path ByteRange, offset int) ([]PathSegment, int, bool, bool) {

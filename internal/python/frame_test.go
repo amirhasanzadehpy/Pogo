@@ -207,7 +207,7 @@ func TestStrictJSONRejectsDuplicateKeysAndOversizedWrites(t *testing.T) {
 }
 
 func TestDecodeSchemaResponsePreservesNestedStrictness(t *testing.T) {
-	valid := `{"protocol_version":1,"id":"1","result":{"schema_version":2,"position_encoding":"utf-8-bytes","lookup_transform_max_depth":2,"lookup_path_max_count":512,"schema_sources":[],"schema_sources_complete":true,"apps":{}},"error":null}`
+	valid := `{"protocol_version":1,"id":"1","result":{"schema_version":3,"position_encoding":"utf-8-bytes","lookup_transform_max_depth":2,"lookup_path_max_count":512,"schema_sources":[],"schema_sources_complete":true,"queryset_method_defs":[],"apps":{}},"error":null}`
 	cases := []struct {
 		name    string
 		payload string
@@ -216,7 +216,7 @@ func TestDecodeSchemaResponsePreservesNestedStrictness(t *testing.T) {
 		{name: "nested duplicate", payload: strings.Replace(valid, `"apps":{}`, `"apps":{},"apps":{}`, 1)},
 		{name: "unknown field", payload: strings.Replace(valid, `"apps":{}`, `"apps":{},"unknown":true`, 1)},
 		{name: "missing field", payload: strings.Replace(valid, `,"schema_sources":[]`, "", 1)},
-		{name: "wrong kind", payload: strings.Replace(valid, `"schema_version":2`, `"schema_version":"2"`, 1)},
+		{name: "wrong kind", payload: strings.Replace(valid, `"schema_version":3`, `"schema_version":"3"`, 1)},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestDecodeAfterDuplicateCheckRemainsStrict(t *testing.T) {
 
 func FuzzDecodeSchemaResponse(f *testing.F) {
 	for _, seed := range []string{
-		`{"protocol_version":1,"id":"1","result":{"schema_version":2,"position_encoding":"utf-8-bytes","lookup_transform_max_depth":2,"lookup_path_max_count":512,"schema_sources":[],"schema_sources_complete":true,"apps":{}},"error":null}`,
+		`{"protocol_version":1,"id":"1","result":{"schema_version":3,"position_encoding":"utf-8-bytes","lookup_transform_max_depth":2,"lookup_path_max_count":512,"schema_sources":[],"schema_sources_complete":true,"queryset_method_defs":[],"apps":{}},"error":null}`,
 		`{"protocol_version":1,"id":"1","result":{"apps":{},"apps":{}},"error":null}`,
 		`{"protocol_version":1,"id":"1","result":null,"error":{"code":"failed","message":"failed"}}`,
 	} {
@@ -263,7 +263,7 @@ func FuzzDecodeSchemaResponse(f *testing.F) {
 func BenchmarkDecodeSchemaResponse(b *testing.B) {
 	snapshot := schema.Snapshot{
 		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, SchemaSourcesComplete: true,
-		LookupPathMaxCount: 512, SchemaSources: []string{}, Apps: map[string]schema.App{},
+		LookupPathMaxCount: 512, SchemaSources: []string{}, QuerySetMethodDefs: []schema.Method{}, Apps: map[string]schema.App{},
 	}
 	payload, err := marshalStrict(map[string]any{
 		"protocol_version": ProtocolVersion, "id": "1", "result": snapshot, "error": nil,

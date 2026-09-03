@@ -20,7 +20,7 @@ func MatchesSourceDigest(source []byte, digest string) bool {
 }
 
 const (
-	Version          = 2
+	Version          = 3
 	PositionEncoding = "utf-8-bytes"
 	maxLookupDepth   = 2
 	maxLookupPaths   = 512
@@ -147,6 +147,10 @@ func Build(snapshot Snapshot) (*Graph, error) {
 	if snapshot.LookupTransformMaxDepth != maxLookupDepth || snapshot.LookupPathMaxCount != maxLookupPaths {
 		return nil, errors.New("invalid lookup bounds")
 	}
+	querySetMethodDefs, err := buildQuerySetMethodDefs(snapshot)
+	if err != nil {
+		return nil, err
+	}
 
 	graph := &Graph{
 		snapshot:    snapshot,
@@ -161,7 +165,7 @@ func Build(snapshot Snapshot) (*Graph, error) {
 			return nil, fmt.Errorf("invalid app metadata for key %q", appKey)
 		}
 		for modelName, model := range app.Models {
-			if err := validateModel(appKey, modelName, model, snapshot); err != nil {
+			if err := validateModel(appKey, modelName, model, snapshot, querySetMethodDefs); err != nil {
 				return nil, err
 			}
 			if _, exists := graph.canonical[model.CanonicalLabel]; exists {
@@ -171,7 +175,7 @@ func Build(snapshot Snapshot) (*Graph, error) {
 			if _, exists := graph.classPath[classPath]; exists {
 				return nil, fmt.Errorf("duplicate model class path %q", classPath)
 			}
-			index, err := buildModelIndex(modelName, model)
+			index, err := buildModelIndex(modelName, model, querySetMethodDefs)
 			if err != nil {
 				return nil, err
 			}
@@ -297,7 +301,30 @@ func pathWithin(root, candidate string) bool {
 	return relative != "" && relative != "." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) || relative == "."
 }
 
-func validateModel(appKey, modelName string, model Model, snapshot Snapshot) error {
+func buildQuerySetMethodDefs(snapshot Snapshot) (map[string]Method, error) {
+	defs := make(map[string]Method, len(snapshot.QuerySetMethodDefs))
+	for _, method := range snapshot.QuerySetMethodDefs {
+		if err := validateMethod(method); err != nil {
+			return nil, fmt.Errorf("queryset method def %s.%s: %w", method.OwnerClass, method.Name, err)
+		}
+		key := method.OwnerClass + "\x00" + method.Name
+		if _, exists := defs[key]; exists {
+			return nil, fmt.Errorf("duplicate queryset method def %s.%s", method.OwnerClass, method.Name)
+		}
+		defs[key] = method
+	}
+	return defs, nil
+}
+
+func resolveQuerySetMethod(defs map[string]Method, key MethodKey) (Method, error) {
+	method, exists := defs[key.OwnerClass+"\x00"+key.Name]
+	if !exists {
+		return Method{}, fmt.Errorf("unknown queryset method %s.%s", key.OwnerClass, key.Name)
+	}
+	return method, nil
+}
+
+func validateModel(appKey, modelName string, model Model, snapshot Snapshot, querySetMethodDefs map[string]Method) error {
 	if modelName == "" || model.CanonicalLabel != appKey+"."+modelName {
 		return fmt.Errorf("model key %q does not match canonical label %q", modelName, model.CanonicalLabel)
 	}
@@ -340,7 +367,11 @@ func validateModel(appKey, modelName string, model Model, snapshot Snapshot) err
 		}
 		querySetMethodNames := make(map[string]struct{}, len(manager.QuerySetMethods))
 		for _, binding := range manager.QuerySetMethods {
-			if err := validateMethod(binding.Method); err != nil {
+			resolved, err := resolveQuerySetMethod(querySetMethodDefs, binding.Method)
+			if err != nil {
+				return fmt.Errorf("model %s manager %s QuerySet method: %w", model.CanonicalLabel, manager.Name, err)
+			}
+			if err := validateMethod(resolved); err != nil {
 				return fmt.Errorf("model %s manager %s QuerySet method %s: %w", model.CanonicalLabel, manager.Name, binding.Method.Name, err)
 			}
 			if _, exists := querySetMethodNames[binding.Method.Name]; exists {
@@ -405,7 +436,11 @@ func validateModel(appKey, modelName string, model Model, snapshot Snapshot) err
 	}
 	querySetMethods := make(map[string]struct{}, len(model.QuerySetMethods))
 	for _, method := range model.QuerySetMethods {
-		if err := validateMethod(method); err != nil {
+		resolved, err := resolveQuerySetMethod(querySetMethodDefs, method)
+		if err != nil {
+			return fmt.Errorf("model %s: %w", model.CanonicalLabel, err)
+		}
+		if err := validateMethod(resolved); err != nil {
 			return fmt.Errorf("model %s QuerySet method %s: %w", model.CanonicalLabel, method.Name, err)
 		}
 		key := method.OwnerClass + "\x00" + method.Name
@@ -462,7 +497,7 @@ func validateRange(sourceRange *SourceRange) error {
 	return nil
 }
 
-func buildModelIndex(name string, model Model) (*modelIndex, error) {
+func buildModelIndex(name string, model Model, querySetMethodDefs map[string]Method) (*modelIndex, error) {
 	index := &modelIndex{
 		name:           name,
 		model:          model,
@@ -508,7 +543,11 @@ func buildModelIndex(name string, model Model) (*modelIndex, error) {
 			}
 		}
 	}
-	for _, method := range model.QuerySetMethods {
+	for _, key := range model.QuerySetMethods {
+		method, err := resolveQuerySetMethod(querySetMethodDefs, key)
+		if err != nil {
+			return nil, fmt.Errorf("model %s: %w", model.CanonicalLabel, err)
+		}
 		querySet := index.ensureQuerySet(method.OwnerClass)
 		methodReference := &MethodRef{method: method}
 		querySet.methods[method.Name] = methodReference
@@ -532,7 +571,11 @@ func buildModelIndex(name string, model Model) (*modelIndex, error) {
 		for _, binding := range manager.QuerySetMethods {
 			methodReference := reference.querySet.methods[binding.Method.Name]
 			if methodReference == nil {
-				methodReference = &MethodRef{method: binding.Method}
+				resolved, err := resolveQuerySetMethod(querySetMethodDefs, binding.Method)
+				if err != nil {
+					return nil, fmt.Errorf("model %s manager %s: %w", model.CanonicalLabel, manager.Name, err)
+				}
+				methodReference = &MethodRef{method: resolved}
 				reference.querySet.methods[binding.Method.Name] = methodReference
 				reference.querySet.methodOrder = append(reference.querySet.methodOrder, methodReference)
 			}
@@ -1381,6 +1424,7 @@ func cloneLookupPath(path LookupPath) LookupPath {
 func cloneSnapshot(snapshot Snapshot) (Snapshot, error) {
 	clone := snapshot
 	clone.SchemaSources = cloneStrings(snapshot.SchemaSources)
+	clone.QuerySetMethodDefs = cloneMethods(snapshot.QuerySetMethodDefs)
 	clone.Apps = make(map[string]App, len(snapshot.Apps))
 	for name, app := range snapshot.Apps {
 		clone.Apps[name] = cloneApp(app)
@@ -1411,7 +1455,7 @@ func cloneModel(model Model) Model {
 	for index := range clone.Managers {
 		clone.Managers[index] = cloneManager(model.Managers[index])
 	}
-	clone.QuerySetMethods = cloneMethods(model.QuerySetMethods)
+	clone.QuerySetMethods = cloneSlice(model.QuerySetMethods)
 	clone.Indexes = cloneSlice(model.Indexes)
 	for index := range clone.Indexes {
 		clone.Indexes[index] = cloneIndex(model.Indexes[index])
@@ -1433,9 +1477,6 @@ func cloneManager(manager Manager) Manager {
 	clone.SourceRange = clonePointer(manager.SourceRange)
 	clone.Methods = cloneMethods(manager.Methods)
 	clone.QuerySetMethods = cloneSlice(manager.QuerySetMethods)
-	for index := range clone.QuerySetMethods {
-		clone.QuerySetMethods[index].Method = cloneMethod(manager.QuerySetMethods[index].Method)
-	}
 	return clone
 }
 

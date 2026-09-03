@@ -291,6 +291,8 @@ func navigationTestFeaturesWithSource(t navigationTestingT, modelsSource string)
 	modelLines := strings.Split(modelsSource, "\n")
 	authorFieldRange := rangeAt(5, 4, 5, len(modelLines[4]))
 	managerRange := rangeAt(4, 0, 6, 30)
+	activeMethod := schema.Method{Name: "active", OwnerClass: querySetClass, SourceRange: methodRange, Chainable: true}
+	activeKey := schema.MethodKey{Name: activeMethod.Name, OwnerClass: activeMethod.OwnerClass}
 	models := map[string]schema.Model{
 		"Author": {
 			CanonicalLabel: authorLabel, Module: "myapp.models", Qualname: "Author", FilePath: modelsPath, LineNumber: 2,
@@ -305,17 +307,17 @@ func navigationTestFeaturesWithSource(t navigationTestingT, modelsSource string)
 			CanonicalLabel: bookLabel, Module: "myapp.models", Qualname: "Book", FilePath: modelsPath, LineNumber: 4,
 			SourceRange: managerRange, Managed: true, DefaultManager: "objects", BaseManager: schema.BaseManager{Name: "_base_manager", OwnerClass: "django.db.models.Manager"},
 			Managers: []schema.Manager{
-				{Name: "objects", OwnerClass: "django.db.models.Manager", QuerySetClass: &querySetClass, SourceRange: managerRange, QuerySetMethods: []schema.BoundQuerySetMethod{{Method: schema.Method{Name: "active", OwnerClass: querySetClass, SourceRange: methodRange, Chainable: true}, AvailableOnManager: true}}},
+				{Name: "objects", OwnerClass: "django.db.models.Manager", QuerySetClass: &querySetClass, SourceRange: managerRange, QuerySetMethods: []schema.BoundQuerySetMethod{{Method: activeKey, AvailableOnManager: true}}},
 				{Name: "catalog", OwnerClass: "myapp.models.BookManager", SourceRange: managerRange, Methods: []schema.Method{{Name: "featured", OwnerClass: "myapp.models.BookManager", SourceRange: methodRange, Chainable: true}}},
 			},
-			QuerySetMethods: []schema.Method{{Name: "active", OwnerClass: querySetClass, SourceRange: methodRange, Chainable: true}},
+			QuerySetMethods: []schema.MethodKey{activeKey},
 			Fields: map[string]schema.Field{
 				"author": {Type: "django.db.models.ForeignKey", InternalType: "ForeignKey", Name: "author", IsRelation: true, RelatedModel: &authorLabel, RuntimeRelatedModel: &authorLabel, SourceModel: bookLabel, SourceRange: authorFieldRange, RelationDirection: &forward, RelationCardinality: &manyToOne, LookupPaths: []schema.LookupPath{{Lookups: []string{"exact"}}}},
 				"title":  {Type: "django.db.models.CharField", InternalType: "CharField", Name: "title", SourceModel: bookLabel, SourceRange: rangeAt(6, 4, 6, 30), LookupPaths: []schema.LookupPath{{Transforms: []string{"lower"}, Kinds: []string{"transform"}, Lookups: []string{"icontains"}}, {Lookups: []string{"icontains"}}}},
 			},
 		},
 	}
-	graph, err := schema.Build(schema.Snapshot{SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512, Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: directory, Models: models}}})
+	graph, err := schema.Build(schema.Snapshot{SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512, QuerySetMethodDefs: []schema.Method{activeMethod}, Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: directory, Models: models}}})
 	if err != nil {
 		t.Fatal(err)
 	}

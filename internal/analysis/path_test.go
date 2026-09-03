@@ -44,6 +44,11 @@ func TestAnalyzeAndCompleteORMPaths(t *testing.T) {
 		{"shortcut reverse manager Q relation", "from django.db.models import Q\nfrom django.shortcuts import get_object_or_404\nfrom myapp.models import Book\nbook = get_object_or_404(Book, id=1)\nbook.author.books.filter(Q(author__na|=value))", []string{"name"}},
 		{"many-to-many through lookup", "from myapp.models import Company\ncompany: Company = request.company\ncompany.members.filter(companymembership__ro|=value)", []string{"role"}},
 		{"many-to-many through lookup suffix", "from myapp.models import Company\ncompany: Company = request.company\ncompany.members.filter(companymembership__role__i|=value)", []string{"in"}},
+		{"constructor field", "from myapp.models import Book\nBook(ti|=value)", []string{"title"}},
+		{"constructor field after positional", "from myapp.models import Book\nBook(id=1, ti|=value)", []string{"title"}},
+		{"bulk_create unique_fields", "from myapp.models import Book\nBook.objects.bulk_create(objs, unique_fields=[\"ti|\"])", []string{"title"}},
+		{"bulk_create update_fields", "from myapp.models import Book\nBook.objects.bulk_create(objs, update_conflicts=True, update_fields=[\"ti|\"])", []string{"title"}},
+		{"bulk_update fields", "from myapp.models import Book\nBook.objects.bulk_update(objs, fields=[\"ti|\"])", []string{"title"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -79,6 +84,27 @@ func TestDjangoExpressionValueStringIsNotAFieldPath(t *testing.T) {
 	source, offset := sourceAtCursor(t, "from django.db.models import Value\nfrom django.db.models.functions import Concat\nfrom myapp.models import Book\nBook.objects.annotate(label=Concat(\"author__name\", Value(\"lit|eral\")))")
 	if context, ok := Analyze(source, offset, graph); ok {
 		t.Fatalf("Analyze() = %#v, want Value string to remain literal", context)
+	}
+}
+
+func TestConstructorAndFieldListNegativeCases(t *testing.T) {
+	graph := pathTestGraph(t)
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{"unknown callee is not a constructor", "def NotAModel(title=None): pass\nNotAModel(tit|=value)"},
+		{"bulk_create batch_size is not a field", "from myapp.models import Book\nBook.objects.bulk_create(objs, batch_size=10|00)"},
+		{"bulk_create positional args is not a field list", "from myapp.models import Book\nBook.objects.bulk_create([\"ti|\"])"},
+		{"only does not accept a list literal", "from myapp.models import Book\nBook.objects.only([\"ti|\"])"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, offset := sourceAtCursor(t, test.source)
+			if context, ok := Analyze(source, offset, graph); ok {
+				t.Fatalf("Analyze() = %#v, want no ORM context", context)
+			}
+		})
 	}
 }
 
@@ -463,15 +489,18 @@ func pathTestGraph(t *testing.T) *schema.Graph {
 	bookModel := testModel("Book", map[string]schema.Field{
 		"id": bookPrimaryKey, "title": title, "published_at": published, "metadata": metadata, "author": author, "store": storeRelation,
 	})
+	activeKey := schema.MethodKey{Name: activeMethod.Name, OwnerClass: activeMethod.OwnerClass}
+	hiddenKey := schema.MethodKey{Name: hiddenMethod.Name, OwnerClass: hiddenMethod.OwnerClass}
 	bookModel.Managers = []schema.Manager{
-		{Name: "objects", OwnerClass: "django.db.models.ManagerFromBookQuerySet", QuerySetClass: &querySetClass, SourceRange: testSourceRange(), Methods: []schema.Method{featuredMethod}, QuerySetMethods: []schema.BoundQuerySetMethod{{Method: activeMethod, AvailableOnManager: true}, {Method: hiddenMethod}}},
+		{Name: "objects", OwnerClass: "django.db.models.ManagerFromBookQuerySet", QuerySetClass: &querySetClass, SourceRange: testSourceRange(), Methods: []schema.Method{featuredMethod}, QuerySetMethods: []schema.BoundQuerySetMethod{{Method: activeKey, AvailableOnManager: true}, {Method: hiddenKey}}},
 		{Name: "catalog", OwnerClass: "myapp.models.BookManager", SourceRange: testSourceRange(), Methods: []schema.Method{featuredMethod, filterMethod}},
 	}
-	bookModel.QuerySetMethods = []schema.Method{activeMethod, hiddenMethod}
+	bookModel.QuerySetMethods = []schema.MethodKey{activeKey, hiddenKey}
 	models["Book"] = bookModel
 	graph, err := schema.Build(schema.Snapshot{
 		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
-		Apps: map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(inferenceTestModelPath()), Models: models}},
+		QuerySetMethodDefs: []schema.Method{activeMethod, hiddenMethod},
+		Apps:               map[string]schema.App{"myapp": {Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(inferenceTestModelPath()), Models: models}},
 	})
 	if err != nil {
 		t.Fatalf("schema.Build() error = %v", err)

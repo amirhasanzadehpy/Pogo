@@ -292,7 +292,7 @@ func TestValidateWireRequiresSchemaSourcesCompleteness(t *testing.T) {
 }
 
 func TestValidateManagerWireRequiresQuerySetBindings(t *testing.T) {
-	method := Method{Name: "active", OwnerClass: "app.BaseQuerySet", SourceRange: testRange(2), Chainable: true}
+	method := MethodKey{Name: "active", OwnerClass: "app.BaseQuerySet"}
 	manager := Manager{
 		Name: "objects", OwnerClass: "app.Manager", SourceRange: testRange(1), Methods: []Method{},
 		QuerySetMethods: []BoundQuerySetMethod{{Method: method, AvailableOnManager: true}},
@@ -551,7 +551,7 @@ func TestManagerMethodsAttachToExactQuerySetClass(t *testing.T) {
 	liveDocstring := "Return live rows."
 	managerSignature := "(limit=10)"
 	managerDocstring := "Return featured rows."
-	model.QuerySetMethods = []Method{
+	methodDefs := []Method{
 		{
 			Name:             "active",
 			OwnerClass:       baseClass,
@@ -563,6 +563,12 @@ func TestManagerMethodsAttachToExactQuerySetClass(t *testing.T) {
 		},
 		{Name: "hidden", OwnerClass: baseClass, SourceRange: testRange(15), Chainable: true},
 		{Name: "archived", OwnerClass: archiveClass, SourceRange: testRange(20), Chainable: true},
+	}
+	snapshot.QuerySetMethodDefs = methodDefs
+	model.QuerySetMethods = []MethodKey{
+		{Name: methodDefs[0].Name, OwnerClass: methodDefs[0].OwnerClass},
+		{Name: methodDefs[1].Name, OwnerClass: methodDefs[1].OwnerClass},
+		{Name: methodDefs[2].Name, OwnerClass: methodDefs[2].OwnerClass},
 	}
 	model.Managers = []Manager{
 		{

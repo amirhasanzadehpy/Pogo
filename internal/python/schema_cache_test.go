@@ -620,6 +620,7 @@ func testSnapshot(source, appLabel string) schema.Snapshot {
 		SchemaVersion: schema.Version, PositionEncoding: schema.PositionEncoding,
 		LookupTransformMaxDepth: 2, LookupPathMaxCount: 512, SchemaSources: []string{source},
 		SchemaSourcesComplete: true,
+		QuerySetMethodDefs:    []schema.Method{},
 		Apps:                  map[string]schema.App{appLabel: {Label: appLabel, ImportName: appLabel, RootPath: filepath.Dir(source), Models: map[string]schema.Model{}}},
 	}
 }

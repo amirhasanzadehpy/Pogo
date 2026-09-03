@@ -982,8 +982,11 @@ func featureTestGraph(t testingT) *schema.Graph {
 		IsRelation: true, RelatedModel: &storeLabel, RelationDirection: &reverse, RelationCardinality: &manyToMany,
 		QueryName: &storeQuery, AccessorName: &storeAccessor, SourceModel: "myapp.Store", SourceRange: featureTestSourceRange(),
 	}
+	activeMethod := schema.Method{Name: "active", OwnerClass: querySetClass, Signature: &activeSignature, Docstring: &activeDoc, Chainable: true, AssumedChainable: true, SourceRange: featureTestSourceRange()}
+	activeKey := schema.MethodKey{Name: activeMethod.Name, OwnerClass: activeMethod.OwnerClass}
 	graph, err := schema.Build(schema.Snapshot{
 		SchemaVersion: schema.Version, PositionEncoding: "utf-8-bytes", LookupTransformMaxDepth: 2, LookupPathMaxCount: 512,
+		QuerySetMethodDefs: []schema.Method{activeMethod},
 		Apps: map[string]schema.App{"myapp": {
 			Label: "myapp", ImportName: "myapp", RootPath: filepath.Dir(featureTestModelPath()),
 			Models: map[string]schema.Model{
@@ -1021,10 +1024,10 @@ func featureTestGraph(t testingT) *schema.Graph {
 						},
 					})
 					model.Managers = []schema.Manager{
-						{Name: "objects", OwnerClass: "django.db.models.ManagerFromBookQuerySet", QuerySetClass: &querySetClass, SourceRange: featureTestSourceRange(), QuerySetMethods: []schema.BoundQuerySetMethod{{Method: schema.Method{Name: "active", OwnerClass: querySetClass, Signature: &activeSignature, Docstring: &activeDoc, Chainable: true, AssumedChainable: true, SourceRange: featureTestSourceRange()}, AvailableOnManager: true}}},
+						{Name: "objects", OwnerClass: "django.db.models.ManagerFromBookQuerySet", QuerySetClass: &querySetClass, SourceRange: featureTestSourceRange(), QuerySetMethods: []schema.BoundQuerySetMethod{{Method: activeKey, AvailableOnManager: true}}},
 						{Name: "catalog", OwnerClass: "myapp.models.BookManager", SourceRange: featureTestSourceRange(), Methods: []schema.Method{{Name: "featured", OwnerClass: "myapp.models.BookManager", Signature: &featuredSignature, Chainable: true, SourceRange: featureTestSourceRange()}}},
 					}
-					model.QuerySetMethods = []schema.Method{{Name: "active", OwnerClass: querySetClass, Signature: &activeSignature, Docstring: &activeDoc, Chainable: true, AssumedChainable: true, SourceRange: featureTestSourceRange()}}
+					model.QuerySetMethods = []schema.MethodKey{activeKey}
 					return model
 				}(),
 			},

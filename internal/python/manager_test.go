@@ -1136,12 +1136,13 @@ connection.connect(address)
 connection.sendall((json.dumps({"protocol_version": 1, "type": "hello", "token": token}, separators=(",", ":")) + "\n").encode())
 request = json.loads(connection.makefile("rb").readline())
 snapshot = {
-    "schema_version": 2,
+    "schema_version": 3,
     "position_encoding": "utf-8-bytes",
     "lookup_transform_max_depth": 2,
     "lookup_path_max_count": 512,
     "schema_sources": [],
     "schema_sources_complete": True,
+    "queryset_method_defs": [],
     "apps": {},
 }
 response = {"protocol_version": 1, "id": request["id"], "result": snapshot, "error": None}

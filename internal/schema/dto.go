@@ -7,6 +7,7 @@ type Snapshot struct {
 	LookupPathMaxCount      int            `json:"lookup_path_max_count"`
 	SchemaSources           []string       `json:"schema_sources"`
 	SchemaSourcesComplete   bool           `json:"schema_sources_complete"`
+	QuerySetMethodDefs      []Method       `json:"queryset_method_defs"`
 	Apps                    map[string]App `json:"apps"`
 }
 
@@ -36,7 +37,7 @@ type Model struct {
 	BaseManager       BaseManager      `json:"base_manager"`
 	CustomManagers    []string         `json:"custom_managers"`
 	Managers          []Manager        `json:"managers"`
-	QuerySetMethods   []Method         `json:"queryset_methods"`
+	QuerySetMethods   []MethodKey      `json:"queryset_methods"`
 	Indexes           []Index          `json:"indexes"`
 	Constraints       []Constraint     `json:"constraints"`
 	Fields            map[string]Field `json:"fields"`
@@ -69,8 +70,13 @@ type Manager struct {
 }
 
 type BoundQuerySetMethod struct {
-	Method             Method `json:"method"`
-	AvailableOnManager bool   `json:"available_on_manager"`
+	Method             MethodKey `json:"method"`
+	AvailableOnManager bool      `json:"available_on_manager"`
+}
+
+type MethodKey struct {
+	Name       string `json:"name"`
+	OwnerClass string `json:"owner_class"`
 }
 
 type Method struct {

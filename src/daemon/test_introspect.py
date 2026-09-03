@@ -72,6 +72,20 @@ class IntrospectionTests(unittest.TestCase):
             self.assertEqual(second_info["range"]["start"]["line"], 4)
             self.assertEqual(set(index._class_nodes[str(source_path.resolve())]), {"Duplicate"})
 
+    def test_custom_methods_falls_back_to_class_range_for_monkey_patched_methods(self):
+        from django.db.models.query import QuerySet
+
+        def injected(self):
+            return self
+
+        QuerySet.injected_by_test = injected
+        self.addCleanup(delattr, QuerySet, "injected_by_test")
+        index = introspect.SourceIndex()
+        methods = introspect.custom_methods(QuerySet, index, True)
+        injected_method = next(method for method in methods if method["name"] == "injected_by_test")
+        self.assertIsNotNone(injected_method["source_range"])
+        self.assertEqual(injected_method["source_range"], index.class_info(QuerySet)["range"])
+
     def test_node_lookups_preserve_node_precedence_over_output_field(self):
         class OutputField:
             def get_lookups(self):
@@ -99,10 +113,11 @@ class IntrospectionTests(unittest.TestCase):
                 "lookup_path_max_count",
                 "schema_sources",
                 "schema_sources_complete",
+                "queryset_method_defs",
                 "apps",
             ],
         )
-        self.assertEqual(snapshot["schema_version"], 2)
+        self.assertEqual(snapshot["schema_version"], 3)
         self.assertEqual(snapshot["position_encoding"], "utf-8-bytes")
         self.assertEqual(snapshot["lookup_transform_max_depth"], 2)
         self.assertEqual(snapshot["lookup_path_max_count"], 512)
@@ -204,11 +219,17 @@ class IntrospectionTests(unittest.TestCase):
             "chainable",
             "assumed_chainable",
         }
+        method_ref_keys = {"name", "owner_class"}
         known_models = {
             model["canonical_label"]
             for application in snapshot["apps"].values()
             for model in application["models"].values()
         }
+        queryset_method_defs = {
+            (method["name"], method["owner_class"]): method for method in snapshot["queryset_method_defs"]
+        }
+        for method in queryset_method_defs.values():
+            self.assertEqual(set(method), method_keys)
         for model in app["models"].values():
             self.assertEqual(set(model), model_keys)
             self.assertEqual(model["file_path"], MODELS_PATH)
@@ -224,9 +245,11 @@ class IntrospectionTests(unittest.TestCase):
                     self.assertEqual(set(method), method_keys)
                 for binding in manager["queryset_methods"]:
                     self.assertEqual(set(binding), {"method", "available_on_manager"})
-                    self.assertEqual(set(binding["method"]), method_keys)
+                    self.assertEqual(set(binding["method"]), method_ref_keys)
+                    self.assertIn((binding["method"]["name"], binding["method"]["owner_class"]), queryset_method_defs)
             for method in model["queryset_methods"]:
-                self.assertEqual(set(method), method_keys)
+                self.assertEqual(set(method), method_ref_keys)
+                self.assertIn((method["name"], method["owner_class"]), queryset_method_defs)
             for field in model["fields"].values():
                 self.assertEqual(set(field), field_keys)
                 self.assertEqual(field["lookups"], sorted(field["lookups"]))
@@ -365,6 +388,9 @@ class IntrospectionTests(unittest.TestCase):
         self.assertEqual(pointer["source_range"], special["source_range"])
 
     def test_managers_queryset_methods_and_safe_signatures(self):
+        queryset_method_defs = {
+            (method["name"], method["owner_class"]): method for method in self.snapshot["queryset_method_defs"]
+        }
         book = models(self.snapshot)["Book"]
         self.assertEqual(book["custom_managers"], ["catalog", "objects"])
         managers_by_name = {manager["name"]: manager for manager in book["managers"]}
@@ -393,7 +419,10 @@ class IntrospectionTests(unittest.TestCase):
         )
         self.assertEqual(featured["source_range"], source_range(58, 4, 60, 66))
 
-        methods_by_name = {method["name"]: method for method in book["queryset_methods"]}
+        methods_by_name = {
+            method["name"]: queryset_method_defs[(method["name"], method["owner_class"])]
+            for method in book["queryset_methods"]
+        }
         self.assertIn("all", methods_by_name)
         self.assertIn("filter", methods_by_name)
         self.assertIn("count", methods_by_name)
@@ -569,7 +598,7 @@ class IntrospectionTests(unittest.TestCase):
 
         def fake_builder(project_root, settings_name):
             calls.append((project_root, settings_name))
-            return {"schema_version": 2, "apps": {}}
+            return {"schema_version": 3, "apps": {}}
 
         introspect.build_snapshot = fake_builder
         try:
@@ -764,7 +793,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
                 {"protocol_version": 1, "id": "2", "method": "schema/load", "params": {}},
             )
             snapshot = introspect.decode_object(reader.read())["result"]
-            self.assertEqual(snapshot["schema_version"], 2)
+            self.assertEqual(snapshot["schema_version"], 3)
             self.assertEqual(snapshot["apps"], {})
             introspect.write_message(
                 connection,
@@ -817,7 +846,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
             [constraint["name"] for constraint in target["constraints"]],
             ["target_name_nonempty", "target_name_unique"],
         )
-        methods_by_name = {method["name"]: method for method in target["queryset_methods"]}
+        queryset_method_defs = {
+            (method["name"], method["owner_class"]): method for method in snapshot["queryset_method_defs"]
+        }
+        methods_by_name = {
+            method["name"]: queryset_method_defs[(method["name"], method["owner_class"])]
+            for method in target["queryset_methods"]
+        }
         self.assertTrue(
             {"all", "filter", "explode", "nullable", "optional", "static_chain", "wrapped"}.issubset(methods_by_name)
         )
