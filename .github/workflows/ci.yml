@@ -186,6 +186,16 @@ jobs:
           npm run package:prepared -- --out "../../dist/pogo-${GITHUB_REF_NAME#v}.vsix"
       - name: Inspect VS Code extension
         run: python3 scripts/check_release.py --vsix "dist/pogo-${GITHUB_REF_NAME#v}.vsix" dist/stage/*/pogo*
+      - name: Publish to VS Code Marketplace
+        working-directory: client/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath "../../dist/pogo-${GITHUB_REF_NAME#v}.vsix"
+      - name: Publish to Open VSX
+        working-directory: client/vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish "../../dist/pogo-${GITHUB_REF_NAME#v}.vsix" -p "$OVSX_PAT"
       - name: Generate checksums
         shell: bash
         run: |
