@@ -609,6 +609,20 @@ class IntrospectionTests(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertEqual(len(calls), 2)
 
+    def test_schema_load_error_surfaces_the_underlying_exception_detail(self):
+        class FailingState:
+            def dump_schema(self):
+                raise RuntimeError("multiple Django settings modules found; pass --settings (a.settings, b.settings)")
+
+        response, should_stop = introspect.dispatch_request(
+            {"protocol_version": 1, "id": "1", "method": "schema/load", "params": {}},
+            FailingState(),
+        )
+        self.assertTrue(should_stop)
+        self.assertEqual(response["error"]["code"], "introspection_failed")
+        self.assertIn("RuntimeError", response["error"]["message"])
+        self.assertIn("multiple Django settings modules found", response["error"]["message"])
+
     def test_worker_releases_schema_response_before_waiting_for_next_request(self):
         class Snapshot(dict):
             pass

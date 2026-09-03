@@ -1109,9 +1109,13 @@ def dispatch_request(request, worker_state):
     if method == "schema/load":
         try:
             return success_response(request_id, worker_state.dump_schema()), False
-        except Exception:
+        except Exception as error:
             traceback.print_exc(file=sys.stderr)
-            return error_response(request_id, "introspection_failed", "Django schema introspection failed"), True
+            detail = f"{type(error).__name__}: {error}"
+            if len(detail) > 2000:
+                detail = detail[:2000] + "..."
+            message = f"Django schema introspection failed: {detail}"
+            return error_response(request_id, "introspection_failed", message), True
     return error_response(request_id, "method_not_found", "unknown worker method"), False
 
 
