@@ -912,6 +912,12 @@ def build_snapshot(project_root, settings_name):
         (model for model in apps.get_models() if not model._meta.abstract and not model._meta.proxy),
         key=lambda item: item._meta.label_lower,
     )
+    if not models:
+        print(
+            "pogo warning: Django app registry reports 0 concrete models; "
+            "verify the resolved settings module points at the intended project",
+            file=sys.stderr,
+        )
     app_models = {
         config.label: {
             "label": config.label,
