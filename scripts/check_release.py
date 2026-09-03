@@ -24,15 +24,18 @@ TARGETS = (
 
 
 def check_worker(root: Path) -> None:
-    source = root / "src" / "daemon" / "introspect.py"
-    tree = ast.parse(source.read_bytes(), filename=str(source))
+    worker_modules = ("introspect.py", "protocol.py")
     imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module.split(".", 1)[0])
-    allowed = set(sys.stdlib_module_names) | {"__future__", "django"}
+    for name in worker_modules:
+        source = root / "src" / "daemon" / name
+        tree = ast.parse(source.read_bytes(), filename=str(source))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module.split(".", 1)[0])
+    sibling_modules = {name.removesuffix(".py") for name in worker_modules}
+    allowed = set(sys.stdlib_module_names) | {"__future__", "django"} | sibling_modules
     unexpected = sorted(imports - allowed)
     if unexpected:
         raise RuntimeError(f"unexpected worker imports: {unexpected}")

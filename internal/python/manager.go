@@ -59,6 +59,7 @@ type Manager struct {
 	activeRuntimeDir    string
 	run                 func(context.Context, func(uint64, int)) (bool, error)
 	workerScript        []byte
+	protocolScript      []byte
 	workerEnvironment   []workerEnvironmentEntry
 	platformEnvironment []workerEnvironmentEntry
 	coordinatorPath     string
@@ -205,6 +206,7 @@ func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, er
 	}
 	config.Environment = nil
 	workerScript := workerdaemon.IntrospectPython
+	protocolScript := workerdaemon.ProtocolPython
 	manager := &Manager{
 		config: config, cache: cache, log: logger,
 		workerEnvironment:   workerEnvironment,
@@ -212,12 +214,16 @@ func NewManager(config Config, cache *schema.Cache, logger Logger) (*Manager, er
 		coordinatorPath:     probe.coordinatorPath,
 	}
 	manager.workerScript = workerScript
+	manager.protocolScript = protocolScript
 	if runtime.GOOS == "windows" && config.CacheDirectory != "" {
 		manager.warning("disable provisional schema cache: private Windows persistence is not implemented")
 		config.CacheDirectory = ""
 		manager.config.CacheDirectory = ""
 	}
-	manager.cacheConfig = newPersistentSchemaCacheConfig(config, pythonInfo, workerEnvironment, platformEnvironment, probe.coordinatorPath, workerScript)
+	workerDigestInput := make([]byte, 0, len(workerScript)+len(protocolScript))
+	workerDigestInput = append(workerDigestInput, workerScript...)
+	workerDigestInput = append(workerDigestInput, protocolScript...)
+	manager.cacheConfig = newPersistentSchemaCacheConfig(config, pythonInfo, workerEnvironment, platformEnvironment, probe.coordinatorPath, workerDigestInput)
 	if graph, _ := cache.Load(); graph != nil {
 		manager.authority = authorityExisting
 	}
@@ -589,6 +595,10 @@ func (manager *Manager) runSession(ctx context.Context, loaded func(uint64, int)
 	scriptPath := filepath.Join(runtimeDirectory, "introspect.py")
 	if err := os.WriteFile(scriptPath, manager.workerScript, 0o600); err != nil {
 		return false, fmt.Errorf("materialize worker script: %w", err)
+	}
+	protocolPath := filepath.Join(runtimeDirectory, "protocol.py")
+	if err := os.WriteFile(protocolPath, manager.protocolScript, 0o600); err != nil {
+		return false, fmt.Errorf("materialize worker protocol module: %w", err)
 	}
 	endpoint, err := newEndpoint(runtimeDirectory)
 	if err != nil {
