@@ -4,6 +4,7 @@
   "description": "Django ORM language support powered by the Pogo language server.",
   "version": "0.2.7",
   "publisher": "amirhasanzadehpy",
+  "license": "MIT",
   "type": "commonjs",
   "engines": {
     "vscode": "^1.91.0"
@@ -83,8 +84,8 @@
     "compile": "tsc --noEmit -p . && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --watch",
     "vscode:prepublish": "npm run clean && npm run compile",
-    "package": "npm run bundle && vsce package --skip-license",
-    "package:prepared": "vsce package --skip-license"
+    "package": "npm run bundle && vsce package",
+    "package:prepared": "vsce package"
   },
   "dependencies": {
     "vscode-languageclient": "10.1.0"
