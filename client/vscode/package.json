@@ -5,6 +5,7 @@
   "version": "0.2.7",
   "publisher": "amirhasanzadehpy",
   "license": "MIT",
+  "icon": "images/pogo-logo.png",
   "type": "commonjs",
   "engines": {
     "vscode": "^1.91.0"
