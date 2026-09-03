@@ -190,7 +190,7 @@ func Build(snapshot Snapshot) (*Graph, error) {
 				}
 			}
 			sourcePaths := []string{model.FilePath}
-			if resolved := resolvedPath(model.FilePath); !samePath(filepath.Clean(model.FilePath), resolved) {
+			if resolved := ResolvedPath(model.FilePath); !SamePath(filepath.Clean(model.FilePath), resolved) {
 				sourcePaths = append(sourcePaths, resolved)
 			}
 			for _, sourcePath := range sourcePaths {
@@ -243,21 +243,23 @@ func (graph *Graph) SchemaAffectingPath(path string) bool {
 	if err != nil {
 		return false
 	}
-	absolute = resolvedPath(absolute)
+	absolute = ResolvedPath(absolute)
 	for _, source := range graph.snapshot.SchemaSources {
-		if samePath(absolute, resolvedPath(source)) {
+		if SamePath(absolute, ResolvedPath(source)) {
 			return true
 		}
 	}
 	for _, app := range graph.snapshot.Apps {
-		if pathWithin(resolvedPath(app.RootPath), absolute) {
+		if PathWithin(ResolvedPath(app.RootPath), absolute) {
 			return true
 		}
 	}
 	return false
 }
 
-func resolvedPath(path string) string {
+// ResolvedPath cleans path and resolves symlinks along it as far as possible,
+// falling back to the closest resolvable ancestor if the path itself does not exist.
+func ResolvedPath(path string) string {
 	path = filepath.Clean(path)
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return filepath.Clean(resolved)
@@ -278,7 +280,9 @@ func resolvedPath(path string) string {
 	}
 }
 
-func samePath(left, right string) bool {
+// SamePath reports whether two already-resolved paths refer to the same file,
+// comparing case-insensitively on Windows.
+func SamePath(left, right string) bool {
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(left, right)
 	}
@@ -293,7 +297,8 @@ func sourceClassKey(filePath, qualname string) string {
 	return filePath + "\x00" + qualname
 }
 
-func pathWithin(root, candidate string) bool {
+// PathWithin reports whether already-resolved candidate is root or lies under it.
+func PathWithin(root, candidate string) bool {
 	relative, err := filepath.Rel(root, candidate)
 	if err != nil || relative == ".." || filepath.IsAbs(relative) {
 		return false
@@ -864,14 +869,14 @@ func (graph *Graph) RelationFieldForSource(filePath, className, fieldName string
 	if graph == nil || filePath == "" || className == "" || fieldName == "" {
 		return nil, false
 	}
-	filePath = resolvedPath(filePath)
+	filePath = ResolvedPath(filePath)
 	var selected *FieldRef
 	selectedTarget := ""
 	for _, index := range graph.canonical {
 		for _, field := range index.fields {
 			direction, forward := field.RelationDirection()
 			sourceRange, hasRange := field.SourceRange()
-			if !forward || direction != RelationForward || !hasRange || field.Name() != fieldName || !strings.HasSuffix(field.SourceModel(), "."+className) || sourceRange.Start != start || sourceRange.End != end || !samePath(resolvedPath(sourceRange.FilePath), filePath) {
+			if !forward || direction != RelationForward || !hasRange || field.Name() != fieldName || !strings.HasSuffix(field.SourceModel(), "."+className) || sourceRange.Start != start || sourceRange.End != end || !SamePath(ResolvedPath(sourceRange.FilePath), filePath) {
 				continue
 			}
 			target, ok := field.RuntimeRelatedModel()

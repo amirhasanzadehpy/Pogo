@@ -350,39 +350,15 @@ func (manager *Manager) schemaAffectingPath(path string) bool {
 }
 
 func pathWithin(root, candidate string) bool {
-	root = canonicalPath(root)
-	candidate = canonicalPath(candidate)
-	relative, err := filepath.Rel(root, candidate)
-	return err == nil && relative != ".." && !filepath.IsAbs(relative) && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return schema.PathWithin(canonicalPath(root), canonicalPath(candidate))
 }
 
 func sameFilePath(left, right string) bool {
-	left, right = canonicalPath(left), canonicalPath(right)
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(left, right)
-	}
-	return left == right
+	return schema.SamePath(canonicalPath(left), canonicalPath(right))
 }
 
 func canonicalPath(path string) string {
-	path = filepath.Clean(path)
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return filepath.Clean(resolved)
-	}
-	ancestor := path
-	var suffix []string
-	for {
-		parent := filepath.Dir(ancestor)
-		if parent == ancestor {
-			return path
-		}
-		suffix = append([]string{filepath.Base(ancestor)}, suffix...)
-		ancestor = parent
-		if resolved, err := filepath.EvalSymlinks(ancestor); err == nil {
-			parts := append([]string{resolved}, suffix...)
-			return filepath.Clean(filepath.Join(parts...))
-		}
-	}
+	return schema.ResolvedPath(path)
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
