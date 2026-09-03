@@ -96,7 +96,7 @@ These are non-negotiable and must be preserved in all changes:
 
 **Build Tags** — All Go builds must use `-tags=grammar_subset,grammar_subset_python`. Release builds must not contain `internal/harness` or `testdata` in their production dependency graph.
 
-**Performance** — Target p95 below 100 µs for warmed editor interactions. The automated release gate is completion p95 < 10 ms, Go RSS ≤ 50 MiB, combined RSS ≤ 150 MiB. Precompute indexes at schema build time. Avoid allocations, reflection, regexes, and sorting in hot loops.
+**Performance** — Target p95 below 100 µs for warmed editor interactions. The automated release gate is completion p95 < 10 ms, Go RSS ≤ 50 MiB, combined RSS ≤ 150 MiB. Precompute indexes at schema build time. Avoid reflection in hot loops, and avoid compiling regexes or allocating per call. Matching already-compiled, package-level regexes and sorting small (candidate-list-sized) slices per request are acceptable — `internal/analysis` does both today within the measured budget — but must not scale with document or schema size.
 
 **Dependency Direction** — `lsp → analysis/schema`, `python → schema`, command packages → internal packages. Feature handlers must not depend on `internal/python`.
 
