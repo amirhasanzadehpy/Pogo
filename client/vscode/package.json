@@ -6,6 +6,10 @@
   "publisher": "amirhasanzadehpy",
   "license": "MIT",
   "icon": "images/pogo-logo.png",
+  "galleryBanner": {
+    "color": "#FFFFFF",
+    "theme": "light"
+  },
   "type": "commonjs",
   "engines": {
     "vscode": "^1.91.0"
