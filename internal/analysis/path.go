@@ -776,19 +776,40 @@ func stringPathRange(source []byte, argument argumentContext, offset int) (ByteR
 // opening '['. It returns false if offset falls outside any element's string content,
 // or if an element isn't a simple (optionally r/u prefixed) quoted string.
 func stringListPathRange(source []byte, start, offset int) (ByteRange, bool) {
+	elements, ok := stringListElements(source, start)
+	if !ok {
+		return ByteRange{}, false
+	}
+	for _, element := range elements {
+		if offset >= element.Start && offset <= element.End {
+			return element, true
+		}
+	}
+	return ByteRange{}, false
+}
+
+// stringListElements returns the byte ranges of every quoted string element in a
+// list literal, e.g. ["a", "b", "c"]. start must point at the list's opening '['.
+// It returns false if the list is unterminated or an element isn't a simple
+// (optionally r/u prefixed) quoted string.
+func stringListElements(source []byte, start int) ([]ByteRange, bool) {
 	for start < len(source) && isSpace(source[start]) {
 		start++
 	}
 	if start >= len(source) || source[start] != '[' {
-		return ByteRange{}, false
+		return nil, false
 	}
+	var elements []ByteRange
 	index := start + 1
 	for index < len(source) {
 		for index < len(source) && isSpace(source[index]) {
 			index++
 		}
-		if index >= len(source) || source[index] == ']' {
-			return ByteRange{}, false
+		if index >= len(source) {
+			return nil, false
+		}
+		if source[index] == ']' {
+			return elements, true
 		}
 		prefixStart := index
 		for index < len(source) && isIdentifierByte(source[index]) {
@@ -796,10 +817,10 @@ func stringListPathRange(source []byte, start, offset int) (ByteRange, bool) {
 		}
 		prefix := strings.ToLower(string(source[prefixStart:index]))
 		if index >= len(source) || (source[index] != '\'' && source[index] != '"') {
-			return ByteRange{}, false
+			return nil, false
 		}
 		if strings.ContainsAny(prefix, "bf") || (prefix != "" && prefix != "r" && prefix != "u") {
-			return ByteRange{}, false
+			return nil, false
 		}
 		quote := source[index]
 		quoteWidth := 1
@@ -822,16 +843,14 @@ func stringListPathRange(source []byte, start, offset int) (ByteRange, bool) {
 			}
 			escaped = false
 			if source[contentEnd] == '\n' && quoteWidth == 1 {
-				return ByteRange{}, false
+				return nil, false
 			}
 			contentEnd++
 		}
 		if contentEnd >= len(source) || strings.ContainsRune(string(source[contentStart:contentEnd]), '\\') {
-			return ByteRange{}, false
+			return nil, false
 		}
-		if offset >= contentStart && offset <= contentEnd {
-			return ByteRange{Start: contentStart, End: contentEnd}, true
-		}
+		elements = append(elements, ByteRange{Start: contentStart, End: contentEnd})
 		index = contentEnd + quoteWidth
 		for index < len(source) && isSpace(source[index]) {
 			index++
@@ -840,9 +859,8 @@ func stringListPathRange(source []byte, start, offset int) (ByteRange, bool) {
 			index++
 			continue
 		}
-		return ByteRange{}, false
 	}
-	return ByteRange{}, false
+	return nil, false
 }
 
 func splitPath(source []byte, path ByteRange, offset int) ([]PathSegment, int, bool, bool) {
