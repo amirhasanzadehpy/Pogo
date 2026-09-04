@@ -75,14 +75,14 @@ server for supported Linux, macOS, and Windows extension hosts on amd64/arm64.
 
 ### VS Code
 
-Download `pogo-0.2.7.vsix` from
-[GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases), then run:
+Install **Pogo** from the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=amirhasanzadehpy.pogo),
+or run:
 
 ```sh
-code --install-extension "$HOME/Downloads/pogo-0.2.7.vsix"
+code --install-extension amirhasanzadehpy.pogo
 ```
 
-You can also run **Extensions: Install from VSIX...** from the command palette.
 No separate Pogo binary or `pogo.executablePath` setting is required. Reload VS
 Code after installation and select the project's Python environment normally.
 
@@ -636,7 +636,9 @@ literal LSP initialization values or command-line arguments.
 Version tags are built only after the complete compatibility, race, native
 transport, cross-build, and performance matrix passes. CI publishes six binary
 archives, a VS Code VSIX containing those six binaries, generated release notes, and `checksums.txt` to
-[GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases).
+[GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases). The same
+VSIX is published to the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=amirhasanzadehpy.pogo).
 
 For bugs and feature requests, use
 [GitHub Issues](https://github.com/amirhasanzadehpy/Pogo/issues).
