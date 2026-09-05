@@ -16,7 +16,7 @@ skill is a decision workflow, not a replacement for repository documentation.
 4. Use `DEV.md` for development, compatibility, performance, and release detail.
 5. Use `README.md` for supported public behavior.
 6. Use `MAINTENANCE.md` for operational procedures and handoff evidence.
-7. Never treat `.codera/plans/` as current architecture without source proof.
+7. Never treat an agent tool's local scratch or plan directory (for example `.codera/plans/`) as current architecture without source proof.
 
 When sources conflict, determine which side violates the intended contract. Fix
 the drift when it is in scope; otherwise report it explicitly. Do not silently
