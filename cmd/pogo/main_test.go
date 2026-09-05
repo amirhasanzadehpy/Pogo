@@ -15,7 +15,7 @@ import (
 
 func TestPogoCLIIdentity(t *testing.T) {
 	var stderr bytes.Buffer
-	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.3.1\n" {
+	if exitCode := run([]string{"-version"}, &stderr); exitCode != 0 || stderr.String() != "pogo 0.3.2\n" {
 		t.Fatalf("pogo -version = code %d, output %q", exitCode, stderr.String())
 	}
 	stderr.Reset()
