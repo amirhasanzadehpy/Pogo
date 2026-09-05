@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml"><img src="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.3.0"><img src="https://img.shields.io/badge/release-v0.3.0-56e39f?style=flat-square" alt="Release v0.3.0"></a>
+  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.3.1"><img src="https://img.shields.io/badge/release-v0.3.1-56e39f?style=flat-square" alt="Release v0.3.1"></a>
   <img src="https://img.shields.io/badge/Go-1.22%2B-42b7ff?style=flat-square" alt="Go 1.22 or newer">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square" alt="Python 3.10 through 3.13">
   <img src="https://img.shields.io/badge/Django-4.2%20%7C%205.2-0c4b33?style=flat-square" alt="Django 4.2 and 5.2">
@@ -76,11 +76,11 @@ server for supported Linux, macOS, and Windows extension hosts on amd64/arm64.
 ### VS Code
 
 Install **Pogo** from the
-[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=amirhasanzadehpy.pogo),
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=amirhasanzadehpy.pogo-django-orm),
 or run:
 
 ```sh
-code --install-extension amirhasanzadehpy.pogo
+code --install-extension amirhasanzadehpy.pogo-django-orm
 ```
 
 No separate Pogo binary or `pogo.executablePath` setting is required. Reload VS
@@ -99,7 +99,7 @@ The commands below use common architectures as examples. Replace `amd64` with
 Linux and macOS archives contain one `pogo` executable:
 
 ```sh
-tar -xzf pogo-v0.3.0-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
+tar -xzf pogo-v0.3.1-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
 mkdir -p "$HOME/.local/bin"
 install -m 0755 pogo "$HOME/.local/bin/pogo"
 export PATH="$HOME/.local/bin:$PATH"
@@ -115,7 +115,7 @@ The example uses `windows-amd64`; substitute `windows-arm64` in both commands on
 Windows on Arm.
 
 ```powershell
-Expand-Archive .\pogo-v0.3.0-windows-amd64.zip -DestinationPath .\pogo
+Expand-Archive .\pogo-v0.3.1-windows-amd64.zip -DestinationPath .\pogo
 $PogoBin = Join-Path $HOME ".local\bin"
 New-Item -ItemType Directory -Force $PogoBin | Out-Null
 Copy-Item .\pogo\pogo.exe "$PogoBin\pogo.exe"
@@ -135,20 +135,20 @@ This repository is private, so authenticate `gh` before downloading:
 
 ```sh
 gh auth login
-gh release download v0.3.0 \
+gh release download v0.3.1 \
   --repo amirhasanzadehpy/Pogo \
-  --pattern 'pogo-v0.3.0-linux-amd64.tar.gz' \
+  --pattern 'pogo-v0.3.1-linux-amd64.tar.gz' \
   --pattern checksums.txt
 sha256sum --check --ignore-missing checksums.txt
 ```
 
 Change the `--pattern` target to match your OS and CPU. On macOS, download the
 matching `darwin` archive and calculate its digest with
-`shasum -a 256 pogo-v0.3.0-darwin-arm64.tar.gz` and compare it with the matching
+`shasum -a 256 pogo-v0.3.1-darwin-arm64.tar.gz` and compare it with the matching
 line in `checksums.txt`. On Windows, use:
 
 ```powershell
-Get-FileHash .\pogo-v0.3.0-windows-amd64.zip -Algorithm SHA256
+Get-FileHash .\pogo-v0.3.1-windows-amd64.zip -Algorithm SHA256
 ```
 
 </details>
@@ -638,7 +638,7 @@ transport, cross-build, and performance matrix passes. CI publishes six binary
 archives, a VS Code VSIX containing those six binaries, generated release notes, and `checksums.txt` to
 [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases). The same
 VSIX is published to the
-[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=amirhasanzadehpy.pogo).
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=amirhasanzadehpy.pogo-django-orm).
 
 For bugs and feature requests, use
 [GitHub Issues](https://github.com/amirhasanzadehpy/Pogo/issues).
