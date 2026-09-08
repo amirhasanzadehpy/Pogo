@@ -66,6 +66,7 @@ Pogo is a Django ORM language server with two deliberately separated execution d
 | `internal/harness` | LSP framing and scenario runner (test-only; production code must not import it) |
 | `src/daemon` | Embedded Python introspection worker |
 | `client/vscode` | TypeScript VS Code language client extension |
+| `client/zed` | Rust/WebAssembly Zed extension |
 
 ### Data Flow
 

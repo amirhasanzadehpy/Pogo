@@ -226,7 +226,7 @@ does not prove that the tag is cryptographically signed.
 ### Workflow Dependency Chain
 
 The release job must wait for all required compatibility, race, native
-transport, cross-build, and performance jobs. It must:
+transport, cross-build, Zed extension, and performance jobs. It must:
 
 - Reject tags that do not match `vX.Y.Z`.
 - Reject a tag mismatch with the extension package version and reject a server
@@ -275,6 +275,27 @@ not change.
 A successful build with an empty GitHub Releases page is not a release. A
 release record without downloadable, checksum-valid consumer artifacts is also
 not complete.
+
+### Zed Extension Publication
+
+The Zed extension is versioned and published independently of the server. It
+downloads the newest published release at runtime, so a server release does not
+require an extension release, and `client/zed/extension.toml` is not checked
+against the tag.
+
+Publish only when `client/zed` itself changes:
+
+1. Bump `version` in `client/zed/extension.toml` and `client/zed/Cargo.toml`
+   together, and commit the resulting `Cargo.lock`.
+2. Confirm `make zed` passes and that the CI `zed-extension` job is green on the
+   commit being submitted.
+3. Open a pull request against `zed-industries/extensions` that updates the
+   Pogo submodule pointer and its `version` in `extensions.toml`. The registry
+   entry uses `path = "client/zed"`, since the extension is a subdirectory of
+   this repository.
+
+An unpublished extension bump is not a release. Verify the gallery entry and a
+clean install after the registry pull request merges.
 
 ### Failed Tagged Runs
 

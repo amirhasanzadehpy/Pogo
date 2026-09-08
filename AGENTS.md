@@ -117,6 +117,7 @@ the only source used while serving editor feature requests.
 | `src/daemon` | Embedded standard-library-plus-Django introspection worker | Bootstrap trusted Django projects, inspect metadata without invoking project APIs deliberately, emit deterministic bounded JSON, and report failures defensively. |
 | `internal/harness` | LSP framing and scenario runner support | Test-only; production packages must not import it. |
 | `client/vscode` | First-party TypeScript VS Code extension and one language client per workspace folder | Keep it a thin process/configuration adapter. Django semantics belong in the server. |
+| `client/zed` | First-party Zed extension: a Rust `wasm32-wasip1` module that resolves the server executable and forwards `djangoOrm` initialization options | Keep it a thin process/configuration adapter. It must not reimplement project, settings-module, or environment resolution the server already owns. |
 | `testdata/sample_django_project` | Controlled Django fixture for metadata, inference, and lifecycle tests | Add focused fixture cases; do not turn the fixture into production code or a runtime dependency. |
 | `scripts` | Standard-library compatibility, benchmark, and release inspection harnesses | Keep runs deterministic and fail closed when required evidence is missing. |
 | `.github/workflows` | Compatibility matrix, native transports, race, fuzz, performance, cross-build, and release gates | Local verification should mirror the relevant CI job. Do not weaken gates to make a change pass. |
@@ -322,6 +323,7 @@ make a persistent change only when the user requests it and its scope is clear.
 | Hot path, graph layout, parser state, or persistent memory | Before/after focused benchmark with `-benchmem`, then `make bench` |
 | Unix/Windows endpoint or process handling | Platform-specific tests plus native transport CI expectations; cross-compilation alone is insufficient |
 | VS Code extension | `npm ci --include=dev` and `npm run compile` in `client/vscode`; package when release behavior changes |
+| Zed extension | `make zed`, which runs `cargo fmt --check`, `cargo clippy`, and a `wasm32-wasip1` release build |
 | Release build graph or embedded worker imports | `make build` and `make release-check` |
 | Release workflow, packaging, tag, or distribution | Validate version synchronization and tag ancestry, complete every required CI job, then verify the published manifest, checksums, archive contents, VSIX version, and runnable native binary |
 | Documentation, badges, diagrams, or benchmark charts | Markdown/link validation, rendered-asset inspection, claim-to-source review, and exact release/profile evidence where shown |
@@ -417,6 +419,11 @@ build/testclient \
 cd client/vscode
 npm ci --include=dev
 npm run compile
+```
+
+```sh
+rustup target add wasm32-wasip1
+make zed
 ```
 
 Do not mix logs with either LSP stdout or worker JSON stdout. Use `-log-file`

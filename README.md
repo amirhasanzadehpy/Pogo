@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml"><img src="https://github.com/amirhasanzadehpy/Pogo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.3.2"><img src="https://img.shields.io/badge/release-v0.3.2-56e39f?style=flat-square" alt="Release v0.3.2"></a>
+  <a href="https://github.com/amirhasanzadehpy/Pogo/releases/tag/v0.3.3"><img src="https://img.shields.io/badge/release-v0.3.3-56e39f?style=flat-square" alt="Release v0.3.3"></a>
   <img src="https://img.shields.io/badge/Go-1.22%2B-42b7ff?style=flat-square" alt="Go 1.22 or newer">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square" alt="Python 3.10 through 3.13">
   <img src="https://img.shields.io/badge/Django-4.2%20%7C%205.2-0c4b33?style=flat-square" alt="Django 4.2 and 5.2">
@@ -86,9 +86,18 @@ code --install-extension amirhasanzadehpy.pogo-django-orm
 No separate Pogo binary or `pogo.executablePath` setting is required. Reload VS
 Code after installation and select the project's Python environment normally.
 
+### Zed
+
+Install **Pogo — Django ORM** from Zed's extension gallery (`zed: extensions`).
+Zed registers Pogo as an additional Python language server and downloads the
+matching Pogo server on first use, so it runs beside Pyright, BasedPyright, or
+Ruff rather than replacing one. See [Editor Setup](#editor-setup) for
+configuration.
+
 ### Standalone Binary
 
-For Neovim, Zed, another LSP client, or command-line use, download the archive for your OS and CPU from
+For Neovim, another LSP client, or command-line use, download the archive for
+your OS and CPU from
 [GitHub Releases](https://github.com/amirhasanzadehpy/Pogo/releases). Every
 release includes Linux, macOS, and Windows builds for `amd64` and `arm64`, plus
 `checksums.txt`.
@@ -99,7 +108,7 @@ The commands below use common architectures as examples. Replace `amd64` with
 Linux and macOS archives contain one `pogo` executable:
 
 ```sh
-tar -xzf pogo-v0.3.2-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
+tar -xzf pogo-v0.3.3-linux-amd64.tar.gz  # use darwin and/or arm64 when needed
 mkdir -p "$HOME/.local/bin"
 install -m 0755 pogo "$HOME/.local/bin/pogo"
 export PATH="$HOME/.local/bin:$PATH"
@@ -115,7 +124,7 @@ The example uses `windows-amd64`; substitute `windows-arm64` in both commands on
 Windows on Arm.
 
 ```powershell
-Expand-Archive .\pogo-v0.3.2-windows-amd64.zip -DestinationPath .\pogo
+Expand-Archive .\pogo-v0.3.3-windows-amd64.zip -DestinationPath .\pogo
 $PogoBin = Join-Path $HOME ".local\bin"
 New-Item -ItemType Directory -Force $PogoBin | Out-Null
 Copy-Item .\pogo\pogo.exe "$PogoBin\pogo.exe"
@@ -135,20 +144,20 @@ This repository is private, so authenticate `gh` before downloading:
 
 ```sh
 gh auth login
-gh release download v0.3.2 \
+gh release download v0.3.3 \
   --repo amirhasanzadehpy/Pogo \
-  --pattern 'pogo-v0.3.2-linux-amd64.tar.gz' \
+  --pattern 'pogo-v0.3.3-linux-amd64.tar.gz' \
   --pattern checksums.txt
 sha256sum --check --ignore-missing checksums.txt
 ```
 
 Change the `--pattern` target to match your OS and CPU. On macOS, download the
 matching `darwin` archive and calculate its digest with
-`shasum -a 256 pogo-v0.3.2-darwin-arm64.tar.gz` and compare it with the matching
+`shasum -a 256 pogo-v0.3.3-darwin-arm64.tar.gz` and compare it with the matching
 line in `checksums.txt`. On Windows, use:
 
 ```powershell
-Get-FileHash .\pogo-v0.3.2-windows-amd64.zip -Algorithm SHA256
+Get-FileHash .\pogo-v0.3.3-windows-amd64.zip -Algorithm SHA256
 ```
 
 </details>
@@ -305,7 +314,7 @@ feature handlers never access the filesystem or Python.
 | --- | --- | --- |
 | **VS Code** | Bundled language-client extension | First-party; one Pogo process per workspace folder |
 | **Neovim 0.11.3+** | Built-in LSP API | Direct configuration; no separate Pogo plugin required |
-| **Zed** | External command through a registered Python adapter | Temporary bridge until a native adapter exists |
+| **Zed 1.17+** | Bundled language-server extension | First-party; registers Pogo alongside Zed's other Python servers |
 
 ### VS Code
 
@@ -369,39 +378,56 @@ Use `init_options.djangoOrm.pythonPath`,
 `:checkhealth vim.lsp` to inspect the active root, command, and logs. Environment
 file paths sent by other clients are resolved against the project root by Pogo.
 
-<details>
-<summary>Zed bridge configuration</summary>
+### Zed
 
-Zed cannot currently register a new language-server adapter from
-`settings.json`. The available bridge replaces the command behind its `pyright`
-slot with Pogo:
+Requires Zed 1.17 or newer; earlier versions ignore the LSP `filterText` that
+ORM path completion depends on and drop every candidate after a `__` separator.
+
+Install **Pogo — Django ORM** from Zed's extension gallery (`zed: extensions`).
+No settings are required: Zed's default `language_servers` list ends with
+`"..."`, which picks up newly registered servers, so Pogo joins the Python
+servers already running instead of replacing one.
+
+Name it explicitly only if your settings pin a list without `"..."`:
 
 ```jsonc
 {
   "languages": {
     "Python": {
-      "language_servers": ["pyright", "basedpyright", "..."]
+      "language_servers": ["basedpyright", "pogo", "..."]
     }
-  },
+  }
+}
+```
+
+The extension resolves the server from `lsp.pogo.binary.path`, then a `pogo` on
+the project `$PATH`, then the newest GitHub release for the current OS and CPU.
+A `pogo` installed by hand for the pre-extension Zed setup therefore keeps being
+used at its original version; run `pogo -version`, and delete it to let the
+extension manage the server instead.
+
+Configuration is optional and uses the same option names as the other clients:
+
+```jsonc
+{
   "lsp": {
-    "pyright": {
-      "binary": {
-        "path": "/home/you/.local/bin/pogo",
-        "arguments": [
-          "-python", "/absolute/path/to/project/.venv/bin/python",
-          "-settings", "config.settings"
-        ]
+    "pogo": {
+      "initialization_options": {
+        "djangoOrm": {
+          "pythonPath": ".venv/bin/python",
+          "settingsModule": "config.settings"
+        }
       }
     }
   }
 }
 ```
 
-This starts Pogo, not Pyright, in that slot. Keep another registered Python
-server such as BasedPyright enabled for general typing. Use escaped backslashes
-for Windows JSON paths and restart language servers after changing arguments.
-
-</details>
+Zed's toolchain selection is not exposed to extensions, so the extension
+resolves the interpreter from an in-project `.venv`, `venv`, or `env`, and
+otherwise from `VIRTUAL_ENV`. Set `pythonPath` when neither applies. See
+[`client/zed/README.md`](client/zed/README.md) for the full option table and
+development workflow.
 
 ## Performance
 
@@ -509,6 +535,10 @@ server and formatter enabled.
 | Worker environment literals | `pogo.environment` | `djangoOrm.environment` (`string` or `null` values) | Not accepted on the CLI |
 | Logs | Pogo output channel | Client stderr | `-log-file PATH` |
 
+Zed and Neovim send the LSP initialization column directly: Zed under
+`lsp.pogo.initialization_options.djangoOrm`, Neovim under
+`init_options.djangoOrm`.
+
 <details>
 <summary>Automatic resolution order</summary>
 
@@ -526,6 +556,10 @@ Python interpreter:
 2. `djangoOrm.pythonPath`
 3. Project-local `.venv`
 4. Actionable configuration error
+
+Clients may fill step 2 before the server sees it: VS Code sends the interpreter
+selected in the Python extension, and Zed sends an in-project `.venv`, `venv`,
+or `env`, or `VIRTUAL_ENV`.
 
 Worker environment file:
 
@@ -599,6 +633,7 @@ make test-race      # race-enabled Go suite
 make compat         # pinned Django 4.2 and 5.2 fixtures
 make bench          # profile plus release performance gates
 make release-check  # inspect production dependencies and embedded imports
+make zed            # format, lint, and build the Zed extension for wasm32-wasip1
 ```
 
 | Directory | Responsibility |
@@ -610,6 +645,7 @@ make release-check  # inspect production dependencies and embedded imports
 | `internal/python` | Worker supervision, authentication, refresh, and transport |
 | `src/daemon` | Embedded Django introspection worker |
 | `client/vscode` | First-party VS Code language client |
+| `client/zed` | First-party Zed extension |
 
 See [DEV.md](DEV.md) for protocol traces, schema inspection, fuzzing,
 performance profiling, release inspection, and versioning.

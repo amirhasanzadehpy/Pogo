@@ -8,13 +8,15 @@ FIXTURE_PYTHON := $(FIXTURE_VENV)/bin/python
 FIXTURE_REQUIREMENTS := $(FIXTURE_DIR)/requirements.txt
 FIXTURE_CONSTRAINTS := $(FIXTURE_DIR)/constraints.txt
 FIXTURE_STAMP := $(FIXTURE_VENV)/.requirements-installed
+ZED_DIR := client/zed
+ZED_TARGET := wasm32-wasip1
 
 ifeq ($(shell uname -s),Darwin)
 GO_BUILD_FLAGS += -ldflags=-linkmode=external
 GO_TEST_FLAGS += -ldflags=-linkmode=external
 endif
 
-.PHONY: all build fixture-env test-env test test-race fuzz bench bench-profile compat release-check clean
+.PHONY: all build fixture-env test-env test test-race fuzz bench bench-profile compat zed release-check clean
 
 all: build
 
@@ -64,9 +66,14 @@ bench-profile: bench
 compat:
 	@"$(PYTHON)" scripts/compat.py
 
+zed:
+	cd "$(ZED_DIR)" && cargo fmt --check
+	cd "$(ZED_DIR)" && cargo clippy --target $(ZED_TARGET) -- -D warnings
+	cd "$(ZED_DIR)" && cargo build --release --target $(ZED_TARGET)
+
 release-check: build
 	@"$(PYTHON)" scripts/check_release.py build/pogo build/testclient
 
 clean:
-	rm -rf "$(FIXTURE_VENV)" build bin benchmark-results
+	rm -rf "$(FIXTURE_VENV)" build bin benchmark-results "$(ZED_DIR)/target"
 	rm -f "$(FIXTURE_DIR)/db.sqlite3" "$(FIXTURE_DIR)"/db.sqlite3-* *.prof *.trace *.sock

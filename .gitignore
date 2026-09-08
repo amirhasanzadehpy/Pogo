@@ -67,3 +67,6 @@ testdata/sample_django_project/db.sqlite3-*
 /client/vscode/out/
 /client/vscode/bin/
 /client/vscode/*.vsix
+
+# Zed extension build artifacts
+/client/zed/target/

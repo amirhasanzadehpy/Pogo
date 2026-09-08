@@ -1,0 +1,11 @@
+id = "pogo-django-orm"
+name = "Pogo — Django ORM"
+description = "Django ORM language support powered by the Pogo language server."
+version = "0.1.0"
+schema_version = 1
+authors = ["amirhasanzadeh <amirhasanzadehpy@gmail.com>"]
+repository = "https://github.com/amirhasanzadehpy/Pogo"
+
+[language_servers.pogo]
+name = "Pogo"
+languages = ["Python"]
