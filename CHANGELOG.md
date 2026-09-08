@@ -2,6 +2,18 @@
 
 All notable changes to Pogo are documented in this file.
 
+## [0.3.3] - 2026-09-08
+
+### Added
+- First-party Zed extension (`client/zed`): a Rust `wasm32-wasip1` module that registers Pogo as an additional Python language server, resolves the server from `lsp.pogo.binary.path`, `$PATH`, or the newest GitHub release, and forwards `djangoOrm` initialization options. It discovers an in-project `.venv`, `venv`, or `env`, then `VIRTUAL_ENV`, since Zed exposes no Python environment-selection API.
+- `make zed` and a `zed-extension` CI job gate the extension with `cargo fmt --check`, `cargo clippy -D warnings`, and a `wasm32-wasip1` release build.
+
+### Fixed
+- Completion items for an ORM path segment now carry a `filterText` that includes the word before the replacement range (`author__` + `name`). Zed, Helix, and nvim-cmp build their filter query from the whole word before the cursor, so every candidate after a `__` separator was discarded client-side; VS Code was unaffected because it derives its query from the `textEdit` range.
+
+### Changed
+- Zed setup no longer documents replacing Pyright's command slot with Pogo.
+
 ## [0.3.0] - 2026-09-03
 
 ### Added

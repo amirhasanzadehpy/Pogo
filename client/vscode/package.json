@@ -2,7 +2,7 @@
   "name": "pogo-django-orm",
   "displayName": "Pogo — Django ORM",
   "description": "Django ORM language support powered by the Pogo language server.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "amirhasanzadehpy",
   "license": "MIT",
   "icon": "images/pogo-logo.png",
