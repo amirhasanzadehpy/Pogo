@@ -241,6 +241,15 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 	if len(items) == 0 {
 		return nil, nil
 	}
+	// A replacement that starts inside a word (an ORM path segment after `__`)
+	// leaves clients that filter on the whole preceding word with a query the
+	// bare label can never match, so restore the prefix in `filterText`.
+	if prefix := analysis.IdentifierPrefix(snapshot.Source, context.Replacement.Start); prefix != "" {
+		for index := range items {
+			filterText := prefix + items[index].Label
+			items[index].FilterText = &filterText
+		}
+	}
 	return &protocol.CompletionList{IsIncomplete: false, Items: items}, nil
 }
 

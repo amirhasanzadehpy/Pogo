@@ -664,6 +664,51 @@ func TestDeepCompletionEditRangeUsesUTF16(t *testing.T) {
 	}
 }
 
+func TestPathSegmentCompletionCarriesWordPrefixFilterText(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///filter-text.py"
+	source, position := lspSourceAtCursor(t, "from myapp.models import Book\nBook.objects.filter(author__na|=value)")
+	if err := features.documents.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := features.Completion(uri, position)
+	if err != nil || completion == nil || len(completion.Items) == 0 {
+		t.Fatalf("Completion() = %#v, %v", completion, err)
+	}
+	// Zed and Helix filter on the whole word before the cursor, so every item
+	// must match "author__na", not just its own label.
+	for _, item := range completion.Items {
+		if item.FilterText == nil {
+			t.Fatalf("completion %q has no filter text", item.Label)
+		}
+		if want := "author__" + item.Label; *item.FilterText != want {
+			t.Fatalf("filter text = %q, want %q", *item.FilterText, want)
+		}
+	}
+}
+
+func TestMemberCompletionOmitsRedundantFilterText(t *testing.T) {
+	features := testFeatures(t)
+	defer features.Close()
+	uri := "file:///no-filter-text.py"
+	source, position := lspSourceAtCursor(t, "from myapp.models import Book\nBook.ob|")
+	if err := features.documents.Open(uri, 1, string(source)); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := features.Completion(uri, position)
+	if err != nil || completion == nil || len(completion.Items) == 0 {
+		t.Fatalf("Completion() = %#v, %v", completion, err)
+	}
+	// The replacement already starts at the word boundary after the dot, so the
+	// label is the correct query and `filterText` would only add noise.
+	for _, item := range completion.Items {
+		if item.FilterText != nil {
+			t.Fatalf("completion %q set filter text %q", item.Label, *item.FilterText)
+		}
+	}
+}
+
 func TestCompletionAndHoverDoNotRequestStoppedWorker(t *testing.T) {
 	project, err := filepath.Abs("../../testdata/sample_django_project")
 	if err != nil {

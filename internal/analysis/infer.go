@@ -439,6 +439,17 @@ func identifierRange(source []byte, offset int) ByteRange {
 	return ByteRange{Start: start, End: end}
 }
 
+// IdentifierPrefix returns the identifier text ending at offset. Editors that
+// build a completion filter query from the whole word before the cursor need
+// that prefix restored in `filterText` whenever a replacement range starts
+// inside a word, as an ORM path segment after `__` does.
+func IdentifierPrefix(source []byte, offset int) string {
+	if offset <= 0 || offset > len(source) {
+		return ""
+	}
+	return string(source[identifierRange(source, offset).Start:offset])
+}
+
 func isIdentifierRune(value rune) bool {
 	return value == '_' || unicode.IsLetter(value) || unicode.IsDigit(value) || unicode.IsMark(value)
 }

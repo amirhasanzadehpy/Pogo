@@ -529,3 +529,27 @@ func testSourceRangeAt(line int) *schema.SourceRange {
 func inferenceTestModelPath() string {
 	return filepath.Join(os.TempDir(), "pogo-tests", "project", "myapp", "models.py")
 }
+
+func TestIdentifierPrefix(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		offset int
+		want   string
+	}{
+		{name: "path segment", source: "filter(author__na=1)", offset: len("filter(author__na"), want: "author__na"},
+		{name: "after separator", source: "filter(author__=1)", offset: len("filter(author__"), want: "author__"},
+		{name: "after dot", source: "objects.filter", offset: len("objects."), want: ""},
+		{name: "inside string", source: "order_by('author__na')", offset: len("order_by('author__na"), want: "author__na"},
+		{name: "multibyte", source: "filter(نام__ex=1)", offset: len("filter(نام__ex"), want: "نام__ex"},
+		{name: "line start", source: "name", offset: 0, want: ""},
+		{name: "past end", source: "name", offset: 99, want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IdentifierPrefix([]byte(test.source), test.offset); got != test.want {
+				t.Fatalf("IdentifierPrefix() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
