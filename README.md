@@ -28,6 +28,10 @@
 </p>
 
 <p align="center">
+  <img src="assets/pogo-demo.gif" alt="Pogo demo: Django lookup completion with type info, multi-hop and reverse-relation hover, and go-to-definition into models.py" width="100%">
+</p>
+
+<p align="center">
   <img src="assets/pogo-features.png" alt="Pogo feature tour showing deep ORM completion, field hover and definition, Model Meta intelligence, and QuerySet API support" width="100%">
 </p>
 
@@ -140,10 +144,9 @@ pogo.exe -version
 <details>
 <summary>Download with GitHub CLI and verify checksums</summary>
 
-This repository is private, so authenticate `gh` before downloading:
+Download and verify with the GitHub CLI:
 
 ```sh
-gh auth login
 gh release download v0.3.3 \
   --repo amirhasanzadehpy/Pogo \
   --pattern 'pogo-v0.3.3-linux-amd64.tar.gz' \
