@@ -71,6 +71,7 @@ Python tool, not replace it.
 | **Diagnostics** | Exact invalid path segments, non-relation traversal, invalid lookups, projections, and `select_related` targets |
 | **Navigation** | Exact definitions for models, fields, relation strings, reverse accessors, managers, built-in or custom `QuerySet` methods, and individual path segments |
 | **Schema refresh** | Debounced reloads, atomic graph replacement, and last-valid-schema fallback when a refresh fails |
+| **DRF serializers** | Model-backed field lists and configuration keys, local declared fields, and dotted `source` attribute paths: completion, hover, and definition |
 
 ## Quick Start
 
@@ -267,6 +268,46 @@ Book.objects.filter(Q(author__name__icontains="ursula") | Q(published_year__gte=
 Book.objects.annotate(average_price=Avg("price")).values("average_price").order_by("-average_price")[:1]
 Book.objects.latest("published_at")
 ```
+
+### Django REST Framework Serializers
+
+For directly declared `ModelSerializer` and `HyperlinkedModelSerializer` classes,
+Pogo resolves a static `Meta.model` against the loaded Django schema:
+
+```python
+from rest_framework import serializers
+from shop.models import Order
+
+class OrderSerializer(serializers.ModelSerializer):
+    customer_email = serializers.EmailField(source="customer.email", read_only=True)
+    summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Order
+        fields = ["id", "customer_email", "summary", "total"]
+        read_only_fields = ["id"]
+        extra_kwargs = {"total": {"required": False}}
+```
+
+Request completion inside literal `fields`, `exclude`, and `read_only_fields`
+lists or tuples, and top-level `extra_kwargs` keys. Field lists include known
+model fields and locally declared DRF fields; `extra_kwargs` suggestions omit
+explicit declarations because DRF ignores that option for them. Hover shows
+model metadata where available. Definition jumps to the model field or the
+local serializer field declaration.
+
+Dotted `source` strings complete model attributes and traverse single-valued
+relations, with hover and definition for each known segment. These are attribute
+paths, so they do not offer ORM lookup suffixes. Foreign-key attnames and reverse
+accessors are valid source attributes; traversal through an attname or collection
+is omitted. `source="*"` is left alone.
+
+Support is syntax-based and needs no extra Pogo worker dependency or configuration.
+Import aliases are recognized. Custom serializer bases, inherited/dynamic fields,
+model properties and methods, escaped/prefixed strings, and incomplete literals
+are conservatively omitted. Pogo does not report unknown serializer-field errors:
+absence from the Django schema does not prove a DRF field is invalid. This release
+does not infer DRF view querysets or generated hyperlink fields.
 
 ### Understand Project APIs
 

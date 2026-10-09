@@ -28,6 +28,9 @@ strings.
   constraints, indexes, projections, and related loading.
 - Explore built-in and custom QuerySet APIs with cached signatures and docs.
 - Catch invalid ORM paths before they reach a request or background task.
+- Complete, hover, and navigate static DRF `ModelSerializer` field lists,
+  configuration keys, and dotted model-backed `source` strings. See the
+  [serializer support and scope](https://github.com/amirhasanzadehpy/Pogo#django-rest-framework-serializers).
 
 ## Get Started
 

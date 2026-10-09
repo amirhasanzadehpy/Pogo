@@ -39,6 +39,12 @@ func (features *Features) Definition(uri string, position analysis.Position) (*p
 	if filePath == "" {
 		filePath, _ = localFilePath(uri)
 	}
+	if declaration, ok := analysis.ResolveSerializerDeclaration(snapshot, offset, graph); ok {
+		range_, valid := protocolRange(snapshot.Source, declaration)
+		if valid {
+			return &protocol.Location{URI: protocol.DocumentUri(uri), Range: range_}, nil
+		}
+	}
 	sourceRange, ok := analysis.ResolveRelationStringDefinition(snapshot, filePath, graph, offset)
 	if !ok {
 		sourceRange, ok = analysis.ResolveDefinitionSyntaxFile(snapshot.Source, offset, graph, snapshot.Syntax, filePath)

@@ -172,6 +172,23 @@ func (features *Features) Completion(uri string, position analysis.Position) (*p
 	}
 	items := make([]protocol.CompletionItem, 0, 16)
 	switch context.Kind {
+	case analysis.ContextSerializerField:
+		for _, candidate := range context.SerializerFields {
+			if !strings.HasPrefix(candidate.Name, context.Identifier) {
+				continue
+			}
+			if candidate.Field != nil && candidate.Declaration.End == 0 {
+				items = append(items, fieldCompletion(schema.FieldAccess{Name: candidate.Name, Field: candidate.Field}, replacement))
+			} else {
+				kind := protocol.CompletionItemKindField
+				detail := "DRF serializer field"
+				items = append(items, protocol.CompletionItem{
+					Label: candidate.Name, Kind: &kind, Detail: &detail,
+					Documentation: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: serializerFieldMarkdown(candidate)},
+					TextEdit:      protocol.TextEdit{Range: replacement, NewText: candidate.Name},
+				})
+			}
+		}
 	case analysis.ContextQueryKeyword:
 		graph.VisitQueryFields(context.Value.CanonicalLabel, func(access schema.FieldAccess) bool {
 			if strings.HasPrefix(access.Name, context.Identifier) {
@@ -273,6 +290,16 @@ func (features *Features) Hover(uri string, position analysis.Position) (*protoc
 	}
 	var field schema.FieldAccess
 	switch context.Kind {
+	case analysis.ContextSerializerField:
+		candidate, exists := context.SerializerField()
+		if !exists {
+			return nil, nil
+		}
+		range_, valid := protocolRange(snapshot.Source, context.Replacement)
+		if !valid {
+			return nil, nil
+		}
+		return &protocol.Hover{Contents: protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: serializerFieldMarkdown(candidate)}, Range: &range_}, nil
 	case analysis.ContextORMPath:
 		if context.Path.OnSeparator {
 			return nil, nil
@@ -421,6 +448,17 @@ func annotationHoverMarkdown(alias string, source []byte, offset int, graph *sch
 	content := fmt.Sprintf("**%s**  \nQuerySet annotation", markdownText(alias))
 	if returnType, ok := analysis.AnnotationReturnType(source, offset, graph, syntax, filePath); ok {
 		content += fmt.Sprintf("\n\n- Return type: `%s`", markdownCode(returnType))
+	}
+	return content
+}
+
+func serializerFieldMarkdown(field analysis.SerializerField) string {
+	content := "**" + markdownText(field.Name) + "**  \nDRF serializer field"
+	if field.Source != "" {
+		content += "\n\nSource attribute: `" + markdownCode(field.Source) + "`"
+	}
+	if field.Field != nil {
+		content += "\n\n" + fieldMarkdown(schema.FieldAccess{Name: field.Field.Name(), Field: field.Field})
 	}
 	return content
 }

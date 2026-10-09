@@ -789,6 +789,14 @@ func TestCompletionAndHoverDoNotRequestStoppedWorker(t *testing.T) {
 	if _, err := features.Definition(uri, definitionPosition); err != nil {
 		t.Fatalf("Definition() with stopped worker error = %v", err)
 	}
+	serializerSource, serializerPosition := lspSourceAtCursor(t, "from rest_framework import serializers\nfrom myapp.models import Book\nclass S(serializers.ModelSerializer):\n    class Meta:\n        model = Book\n        fields = ['tit|']\n")
+	if err := features.documents.Open(uri, 2, string(serializerSource)); err != nil {
+		t.Fatal(err)
+	}
+	serializerCompletion, err := features.Completion(uri, serializerPosition)
+	if err != nil || serializerCompletion == nil || len(serializerCompletion.Items) != 1 || serializerCompletion.Items[0].Label != "title" {
+		t.Fatalf("DRF completion with stopped worker = %#v, %v", serializerCompletion, err)
+	}
 	if got := manager.RequestCount(); got != requestsAfterStop {
 		t.Fatalf("worker requests after cached feature handlers = %d, want %d", got, requestsAfterStop)
 	}

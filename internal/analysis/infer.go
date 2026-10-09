@@ -39,6 +39,7 @@ const (
 	ContextMethodMember
 	ContextORMPath
 	ContextMetaField
+	ContextSerializerField
 )
 
 type ByteRange struct {
@@ -47,12 +48,13 @@ type ByteRange struct {
 }
 
 type Context struct {
-	Kind        ContextKind
-	Value       Value
-	Identifier  string
-	Replacement ByteRange
-	Method      *schema.MethodRef
-	Path        *PathContext
+	Kind             ContextKind
+	Value            Value
+	Identifier       string
+	Replacement      ByteRange
+	Method           *schema.MethodRef
+	Path             *PathContext
+	SerializerFields []SerializerField
 }
 
 var (
@@ -86,6 +88,9 @@ func AnalyzeSyntaxFile(source []byte, offset int, graph *schema.Graph, syntax []
 func analyze(source []byte, offset int, graph *schema.Graph, syntax []SyntaxStatement, filePath string) (Context, bool) {
 	if graph == nil || offset < 0 || offset > len(source) {
 		return Context{}, false
+	}
+	if context, ok := analyzeSerializerContext(source, offset, graph, syntax); ok {
+		return context, true
 	}
 	if context, ok := analyzeMetaFieldContext(source, offset, graph, syntax, filePath); ok {
 		return context, true

@@ -240,6 +240,31 @@ without activating it:
 .venv-fixture/bin/python testdata/sample_django_project/manage.py check
 ```
 
+### DRF Serializer Analysis
+
+`internal/analysis/serializer.go` recognizes direct DRF model serializer bases
+and resolves literal `Meta.model` references through the existing graph. It uses
+the document's assignment/scope snapshots and a bounded literal-expression tokenizer
+(64 KiB per expression, 4,096 tokens); it neither imports DRF nor instantiates
+serializers. Custom bases, function-local/conditional serializers, dynamic models,
+and unsupported literals are omitted.
+
+Serializer contexts retain a separate set of API field candidates and same-file
+declaration byte ranges. Explicit declarations override model candidates. Dotted
+`source` traversal uses instance attribute names and single-valued relation
+metadata, never query-name/lookup traversal. These contexts feed completion, hover,
+and definition; they do not feed ORM diagnostics. Unknown model properties and
+custom/dynamic serializer fields cannot safely be diagnosed from this snapshot.
+
+Verification includes `TestSerializer*` in `internal/lsp`, cached DRF completion
+with the fixture worker stopped, `FuzzSerializerContext` in `internal/analysis`,
+and `BenchmarkSerializerCompletion`. Run the new fuzz target with:
+
+```sh
+go test -tags=grammar_subset,grammar_subset_python -run '^$' \
+  -fuzz '^FuzzSerializerContext$' -fuzztime=30s ./internal/analysis
+```
+
 ## Trust Boundary
 
 Django startup imports and executes code from the target project. Only run the

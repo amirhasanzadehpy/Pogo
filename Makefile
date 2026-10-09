@@ -56,6 +56,7 @@ fuzz:
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzUTF16PositionRoundTrip$$' -fuzztime=30s ./internal/analysis
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzUTF16EditMatchesFullParse$$' -fuzztime=30s ./internal/analysis
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzORMPathExtraction$$' -fuzztime=30s ./internal/analysis
+	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzSerializerContext$$' -fuzztime=30s ./internal/analysis
 	go test $(GO_TEST_FLAGS) -run '^$$' -fuzz '^FuzzStoreParserRecovery$$' -fuzztime=30s ./internal/analysis
 
 bench: build

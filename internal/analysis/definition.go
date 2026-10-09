@@ -32,6 +32,12 @@ func ResolveDefinitionSyntaxFile(source []byte, offset int, graph *schema.Graph,
 
 func contextSourceRange(context Context, graph *schema.Graph) (schema.SourceRange, bool) {
 	switch context.Kind {
+	case ContextSerializerField:
+		field, ok := context.SerializerField()
+		if !ok || field.Field == nil || field.Declaration.End != 0 {
+			return schema.SourceRange{}, false
+		}
+		return field.Field.SourceRange()
 	case ContextORMPath:
 		if context.Path == nil || context.Path.OnSeparator {
 			return schema.SourceRange{}, false

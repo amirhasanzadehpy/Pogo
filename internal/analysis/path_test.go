@@ -408,7 +408,7 @@ func TestResolvePathSegmentRejectsNonterminalLookup(t *testing.T) {
 	}
 }
 
-func pathTestGraph(t *testing.T) *schema.Graph {
+func pathTestGraph(t testing.TB) *schema.Graph {
 	t.Helper()
 	forward, reverse := "forward", "reverse"
 	manyToOne, oneToMany, oneToOne, manyToMany := "many-to-one", "one-to-many", "one-to-one", "many-to-many"
