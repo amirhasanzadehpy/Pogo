@@ -72,6 +72,12 @@ jobs:
           if [[ "$RUNNER_OS" == "macOS" ]]; then EXTRA=(-ldflags=-linkmode=external); fi
           go test -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" ./...
           go build -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" ./cmd/pogo ./cmd/testclient
+      - name: Stress schema save debounce
+        shell: bash
+        run: |
+          EXTRA=()
+          if [[ "$RUNNER_OS" == "macOS" ]]; then EXTRA=(-ldflags=-linkmode=external); fi
+          go test -tags=grammar_subset,grammar_subset_python "${EXTRA[@]}" -run '^TestManagerDebouncesSchemaAffectingSaves$' -count=100 ./internal/python
 
   cross-build:
     runs-on: ubuntu-latest

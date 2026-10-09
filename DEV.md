@@ -376,6 +376,12 @@ Linux/macOS jobs exercise Unix sockets; native Windows CI exercises authenticate
 loopback TCP. Cross-build checks verify both Linux and Windows release command
 graphs but are not presented as native transport tests.
 
+Native CI also repeats `TestManagerDebouncesSchemaAffectingSaves` 100 times.
+The test parks the burst debounce timer until all saves have arrived, then
+releases its final callback. This avoids assuming filesystem path resolution
+and runner scheduling finish a ten-save burst within 25 ms, while preserving
+the exact worker-attempt and generation-count checks.
+
 ## Release Inspection
 
 Production builds must retain `grammar_subset,grammar_subset_python`. Native

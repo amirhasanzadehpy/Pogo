@@ -206,7 +206,7 @@ func TestManagerDebouncesSchemaAffectingSaves(t *testing.T) {
 	project := t.TempDir()
 	manager := &Manager{
 		config: Config{ProjectRoot: project, RestartLimit: 1, BackoffBase: time.Millisecond},
-		cache:  &schema.Cache{}, refreshDelay: 25 * time.Millisecond,
+		cache:  &schema.Cache{}, refreshDelay: time.Hour,
 	}
 	started := make(chan int32, 8)
 	var attempts atomic.Int32
@@ -215,7 +215,7 @@ func TestManagerDebouncesSchemaAffectingSaves(t *testing.T) {
 		loaded(uint64(attempt), 1)
 		started <- attempt
 		<-ctx.Done()
-		return true, ctx.Err()
+		return true, nil
 	}
 	var generations atomic.Int32
 	manager.Start(context.Background(), func(generation uint64, err error) {
@@ -223,10 +223,30 @@ func TestManagerDebouncesSchemaAffectingSaves(t *testing.T) {
 			generations.Add(1)
 		}
 	})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Stop(ctx); err != nil {
+			t.Errorf("stop manager: %v", err)
+		}
+	})
 	waitForAttempt(t, started, 1)
 	path := filepath.Join(project, "myapp", "models.py")
+	// Path resolution and scheduling can take longer than 25 ms on native
+	// Windows runners. Keep the burst's timer parked until every save arrives,
+	// then release the actual final callback; do not assume a wall-clock burst.
 	for index := 0; index < 10; index++ {
 		manager.DidSave(path)
+	}
+	manager.mu.Lock()
+	epoch := manager.refreshEpoch
+	released := manager.releasedEpoch
+	manager.refreshDeadline = time.Now()
+	manager.refreshDelay = 25 * time.Millisecond
+	manager.refreshTimer.Reset(0)
+	manager.mu.Unlock()
+	if epoch != 10 || released != 0 {
+		t.Fatalf("burst epochs requested=%d released=%d, want 10 and 0", epoch, released)
 	}
 	waitForAttempt(t, started, 2)
 	select {
@@ -246,7 +266,9 @@ func TestManagerDebouncesSchemaAffectingSaves(t *testing.T) {
 	}
 	stopContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_ = manager.Stop(stopContext)
+	if err := manager.Stop(stopContext); err != nil {
+		t.Fatalf("stop manager: %v", err)
+	}
 	if attempts.Load() != 12 || generations.Load() != 12 {
 		t.Fatalf("attempts=%d generation events=%d, want 12 and 12", attempts.Load(), generations.Load())
 	}
