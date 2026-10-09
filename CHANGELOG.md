@@ -2,6 +2,26 @@
 
 All notable changes to Pogo are documented in this file.
 
+## [0.4.0] - Unreleased
+
+### Added
+- Completion, hover, and definition for direct DRF `ModelSerializer` and
+  `HyperlinkedModelSerializer` classes with a static `Meta.model`.
+- Model and local serializer field suggestions in literal `fields`,
+  `exclude`, and `read_only_fields` entries, and model-backed top-level
+  `extra_kwargs` keys with option-specific selection.
+- Dotted `source` attribute completion and navigation through single-valued
+  model relations, using the cached Django schema without importing DRF.
+- Navigation to local serializer declarations follows unsaved edits.
+- VS Code `pogo.projectRoot` configuration for Django projects whose root
+  differs from the owning workspace folder.
+
+### Scope
+- Custom serializer bases, dynamic models and fields, unsupported literals,
+  and source traversal through collections are conservatively omitted.
+- Unknown serializer fields do not receive ORM diagnostics. DRF view
+  queryset inference and generated hyperlink fields are not included.
+
 ## [0.3.3] - 2026-09-08
 
 ### Added

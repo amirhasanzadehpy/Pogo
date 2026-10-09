@@ -52,6 +52,9 @@ Pogo gives your editor that missing runtime context:
   filters, `Q(...)`, projections, updates, ordering, constraints, and `Meta`.
 - **Explore the QuerySet API.** Get signatures, docs, completion, and Django
   source navigation for built-in methods alongside your custom methods.
+- **Understand DRF serializers.** Complete model-backed field lists and
+  configuration keys, follow dotted `source` attributes, and hover or jump
+  to model fields and local serializer declarations.
 - **Catch mistakes before the request runs.** See exact diagnostics for broken
   field paths, invalid lookups, and unsafe relation traversal.
 - **Stay responsive.** Django discovers the schema in the background; warmed
