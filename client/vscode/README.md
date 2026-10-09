@@ -41,6 +41,7 @@ bundled server.
 
 | Setting | Behavior |
 | --- | --- |
+| **Pogo: Project Root** | Overrides the Django project root for settings discovery, imports, and the worker's working directory. Relative paths resolve from the workspace folder; empty uses that folder. Interpreter and environment-file paths remain workspace-relative. |
 | **Pogo: Executable Path** | Optional source-build or custom-server override. When empty, the extension uses its bundled server. |
 | **Pogo: Python Path** | Overrides the Django worker interpreter. When empty, Pogo uses VS Code's active Python environment, then the workspace `.venv`. |
 | **Pogo: Settings Module** | Overrides settings discovery. Otherwise Pogo checks an explicitly configured worker `DJANGO_SETTINGS_MODULE`, the literal `manage.py` setting, then one unambiguous immediate `*/settings.py`. Ambient editor settings are not used. |

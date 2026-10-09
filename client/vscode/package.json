@@ -44,6 +44,12 @@
     "configuration": {
       "title": "Pogo",
       "properties": {
+        "pogo.projectRoot": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Django project root used for settings discovery, Python imports, and the worker's working directory. Relative paths are resolved against the workspace folder. Leave empty to use the workspace folder. Python and environment-file paths remain relative to the workspace folder."
+        },
         "pogo.executablePath": {
           "type": "string",
           "default": "",
@@ -84,6 +90,7 @@
     }
   },
   "scripts": {
+    "test": "node --test test/*.test.cjs",
     "clean": "node -e \"require('node:fs').rmSync('out', { recursive: true, force: true })\"",
     "bundle": "node scripts/bundle.js",
     "compile": "tsc --noEmit -p . && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",

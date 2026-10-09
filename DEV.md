@@ -104,6 +104,12 @@ unambiguous immediate `*/settings.py`. Ambient `DJANGO_SETTINGS_MODULE` is not a
 configuration source. Explicit settings that conflict with the worker
 environment fail configuration, as do ambiguous settings.
 
+The VS Code extension resolves `pogo.projectRoot` against its owning workspace
+folder and sends an absolute `djangoOrm.projectRoot`. Empty uses the workspace
+folder. Its interpreter and environment-file overrides remain workspace-relative.
+Run `npm ci --include=dev`, `npm run compile`, and `npm test` in `client/vscode`
+to verify client configuration, including nested Django roots.
+
 The worker starts after the LSP `initialized` notification, communicates over a
 private local endpoint using bounded protocol-v1 JSON frames, and is stopped and
 reaped on shutdown, exit, or stdio EOF. Worker and project output is forwarded

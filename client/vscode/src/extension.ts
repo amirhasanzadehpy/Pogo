@@ -211,6 +211,10 @@ async function createClient(
     configuration.get<string>('pythonPath', '').trim(),
     target.folder,
   );
+  const projectRoot = resolveWorkspacePath(
+    configuration.get<string>('projectRoot', '').trim(),
+    target.folder,
+  ) || target.folder?.uri.fsPath;
   const settingsModule = configuration
     .get<string>('settingsModule', '')
     .trim();
@@ -226,7 +230,7 @@ async function createClient(
     target.folder === undefined
       ? undefined
       : {
-          projectRoot: target.folder.uri.fsPath,
+          projectRoot,
           ...(pythonPath === '' ? {} : { pythonPath }),
           ...(settingsModule === '' ? {} : { settingsModule }),
           ...(environmentFile === '' ? {} : { environmentFile }),

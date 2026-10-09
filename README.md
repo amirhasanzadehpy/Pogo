@@ -338,6 +338,22 @@ add only the required overrides to `.vscode/settings.json`:
 
 Relative paths resolve from each workspace folder. The extension sends the
 absolute environment-file path to Pogo and never reads or sends its contents.
+
+If Django lives in a subdirectory of the workspace, set `pogo.projectRoot`:
+
+```json
+{
+  "pogo.projectRoot": "project_root",
+  "pogo.pythonPath": ".venv/bin/python",
+  "pogo.settingsModule": "project_settings.settings"
+}
+```
+
+The project root controls settings discovery, Python imports, and the Django
+worker's working directory. An empty value uses the workspace folder. Relative
+interpreter and environment-file paths still resolve from the workspace folder,
+so a workspace-level `.venv` can serve a nested Django project.
+
 No `.env` variant is discovered automatically. The worker starts with no
 ambient application variables, loads the file, then applies
 `pogo.environment`; a string replaces a file value and `null` removes it.
@@ -531,7 +547,7 @@ server and formatter enabled.
 
 | Need | VS Code | LSP initialization | CLI |
 | --- | --- | --- | --- |
-| Project root | Workspace folder | `djangoOrm.projectRoot` | `-project PATH` |
+| Project root | `pogo.projectRoot` (defaults to workspace folder) | `djangoOrm.projectRoot` | `-project PATH` |
 | Python interpreter | `pogo.pythonPath` | `djangoOrm.pythonPath` | `-python PATH` |
 | Settings module | `pogo.settingsModule` | `djangoOrm.settingsModule` | `-settings MODULE` |
 | Worker environment file | `pogo.envFile` | `djangoOrm.environmentFile` | `-worker-env-file PATH` |
