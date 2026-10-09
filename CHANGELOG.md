@@ -2,7 +2,7 @@
 
 All notable changes to Pogo are documented in this file.
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-10-09
 
 ### Added
 - Completion, hover, and definition for direct DRF `ModelSerializer` and
